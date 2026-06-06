@@ -1,0 +1,2520 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>AsistenciaQR — IE N.° 0162 SAN JOSÉ OBRERO - SECUNDARIA - UGEL 05 - SJL</title>
+
+<!-- ══ PWA META TAGS ══ -->
+<meta name="application-name" content="AsistenciaQR">
+<meta name="description" content="Sistema de control de asistencia IE N.° 0162 SAN JOSÉ OBRERO - Secundaria">
+<meta name="theme-color" content="#8b1a1a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AsistenciaQR">
+<meta name="msapplication-TileColor" content="#8b1a1a">
+<meta name="msapplication-tap-highlight" content="no">
+
+<!-- ══ PWA ICONS (SVG inline vía data URI) ══ -->
+<link rel="icon" type="image/jpeg" href="logo.jpeg">
+<link rel="apple-touch-icon" href="logo.jpeg">
+
+<!-- ══ PWA MANIFEST (archivo físico) ══ -->
+<link rel="manifest" href="./manifest.json">
+
+<!-- ══ SERVICE WORKER (caché offline) ══ -->
+<!-- ⚠️ IMPORTANTE: el Service Worker debe estar en un archivo físico separado (sw.js).
+     Un SW registrado desde un Blob URL no puede interceptar las peticiones reales
+     de la app porque su scope queda limitado a blob://, rompiendo el modo offline.
+     Copia el contenido de sw.js (incluido en este paquete) a la raíz de tu servidor. -->
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js', { scope: './' })
+    .then(reg => {
+      console.log('✅ Service Worker registrado:', reg.scope);
+      reg.addEventListener('updatefound', () => {
+        const newWorker = reg.installing;
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            console.log('🔄 Nueva versión disponible — recarga para actualizar');
+          }
+        });
+      });
+    })
+    .catch(err => console.warn('SW no pudo registrarse:', err));
+}
+</script>
+
+<!-- ══ BOTÓN "INSTALAR APP" ══ -->
+<script>
+let _deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  _deferredInstallPrompt = e;
+  const btn = document.getElementById('btnInstalarApp');
+  if (btn) btn.style.display = 'flex';
+});
+window.addEventListener('appinstalled', () => {
+  _deferredInstallPrompt = null;
+  const btn = document.getElementById('btnInstalarApp');
+  if (btn) btn.style.display = 'none';
+  console.log('✅ App instalada correctamente');
+});
+function instalarApp() {
+  if (!_deferredInstallPrompt) return;
+  _deferredInstallPrompt.prompt();
+  _deferredInstallPrompt.userChoice.then(result => {
+    if (result.outcome === 'accepted') console.log('✅ Usuario aceptó instalar');
+    _deferredInstallPrompt = null;
+    const btn = document.getElementById('btnInstalarApp');
+    if (btn) btn.style.display = 'none';
+  });
+}
+
+// ══ iOS / Safari: mostrar banner de instalación manual ══
+(function() {
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const isInStandaloneMode = ('standalone' in window.navigator) && window.navigator.standalone;
+  const dismissed = sessionStorage.getItem('iosBannerDismissed');
+  if (isIos && !isInStandaloneMode && !dismissed) {
+    window.addEventListener('DOMContentLoaded', () => {
+      const banner = document.getElementById('iosBanner');
+      if (banner) banner.style.display = 'flex';
+    });
+  }
+})();
+function cerrarBannerIos() {
+  sessionStorage.setItem('iosBannerDismissed', '1');
+  const b = document.getElementById('iosBanner');
+  if (b) b.style.display = 'none';
+}
+</script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+
+<!-- ══ ÚNICO CAMBIO: jsQR cargado al inicio ══ -->
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<!-- ══ FIREBASE ══ -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, signInAnonymously, signInWithCustomToken }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, collection, doc, addDoc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, query, where, orderBy, onSnapshot, serverTimestamp, writeBatch }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+// ══════════════════════════════════════════════════════════════════
+// 🔐 SEGURIDAD — API KEY DE FIREBASE
+// ══════════════════════════════════════════════════════════════════
+// El API key de Firebase es PÚBLICO por diseño (se envía al navegador),
+// pero DEBES restringirlo para que solo funcione desde tu dominio:
+//
+// PASO OBLIGATORIO → Google Cloud Console → APIs y servicios → Credenciales
+//   → Selecciona la clave "Browser key (auto created by Firebase)"
+//   → Restricciones de aplicación → Sitios web HTTP
+//   → Agrega: https://TU-DOMINIO.web.app y https://TU-DOMINIO.firebaseapp.com
+//
+// Sin esa restricción cualquier persona puede usar tu cuota de Firebase.
+// ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════
+// 🔧 CONFIGURACIÓN FIREBASE — PROYECTO SECUNDARIA
+// Reemplaza cada valor con los datos de tu nuevo proyecto Firebase.
+// Firebase Console → Configuración del proyecto → Tus apps → Config
+// ══════════════════════════════════════════════════════════════════
+const firebaseConfig = {
+  apiKey: "AIzaSyD0db9aMnyl1so_253YTfxLg230a7-ESPw",
+  authDomain: "sistema-de-asistencia-qr-se.firebaseapp.com",
+  projectId: "sistema-de-asistencia-qr-se",
+  storageBucket: "sistema-de-asistencia-qr-se.firebasestorage.app",
+  messagingSenderId: "1022347835062",
+  appId: "1:1022347835062:web:d28fbed67c41e3fed51817",
+  measurementId: "G-K0LJEVK7F0"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// Objeto interno — nunca se expone en window
+const _fbInterno = { auth, db, collection, doc, addDoc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, query, where, orderBy, onSnapshot, serverTimestamp, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, signInAnonymously, signInWithCustomToken, writeBatch };
+
+// FIX-LETRERO: llamar _iniciarApp cuando Firebase esté listo.
+// Si el script clásico ya la registró en window, la llamamos de inmediato.
+// Si aún no (internet lento), esperamos hasta que esté disponible.
+function _llamarIniciarApp(fb, intentos) {
+  if (window._iniciarApp) {
+    window._iniciarApp(fb);
+  } else if (intentos < 50) {
+    setTimeout(() => _llamarIniciarApp(fb, intentos + 1), 100);
+  } else {
+    console.error('❌ _iniciarApp no se registró después de 5 segundos');
+  }
+}
+_llamarIniciarApp(_fbInterno, 0);
+</script>
+
+<style>
+:root {
+  --primario:#8b1a1a; --primario-oscuro:#6b1212; --primario-claro:#a52320;
+  --naranja:#e67e22; --rojo:#8b1a1a; --azul:#2980b9; --morado:#8e44ad;
+  --gris-bg:#f4f4f6; --gris-claro:#e8e8ea; --blanco:#fff; --texto:#2c2c2c; --texto-suave:#6c757d;
+  --borde:#dee2e6;
+  --shadow-sm:0 1px 4px rgba(0,0,0,.08);
+  --shadow-md:0 4px 20px rgba(0,0,0,.12);
+  --shadow-lg:0 12px 40px rgba(0,0,0,.18);
+  --radius:14px; --radius-sm:8px;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'DM Sans',sans-serif;background:var(--gris-bg);min-height:100vh;color:var(--texto);}
+
+/* ── SPLASH ── */
+/* ── iOS INSTALL BANNER ── */
+#iosBanner{display:none;position:fixed;bottom:0;left:0;right:0;z-index:99998;background:linear-gradient(135deg,#6b1212,#8b1a1a);color:white;padding:14px 16px 20px;flex-direction:column;gap:8px;box-shadow:0 -4px 20px rgba(0,0,0,.3);}
+.ios-banner-top{display:flex;align-items:center;justify-content:space-between;}
+.ios-banner-title{font-weight:700;font-size:14px;display:flex;align-items:center;gap:8px;}
+.ios-banner-close{background:rgba(255,255,255,.15);border:none;color:white;width:26px;height:26px;border-radius:50%;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+.ios-banner-steps{font-size:12px;color:rgba(255,255,255,.85);line-height:1.7;background:rgba(0,0,0,.2);border-radius:10px;padding:10px 12px;}
+.ios-banner-steps b{color:white;}
+
+#splashScreen{position:fixed;inset:0;z-index:99999;background:linear-gradient(135deg,#5a1010,#6b1212,#8b1a1a);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;}
+.splash-icon{font-size:56px;animation:pulse 1.5s infinite;}
+.splash-txt{color:white;font-size:14px;opacity:.7;}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.08)}}
+
+/* ── LOGIN ── */
+#loginScreen{position:fixed;inset:0;z-index:9999;background:linear-gradient(135deg,#5a1010,#6b1212,#8b1a1a);display:none;align-items:center;justify-content:center;padding:20px;}
+.login-card{background:white;border-radius:20px;padding:36px;width:100%;max-width:400px;box-shadow:0 24px 80px rgba(0,0,0,.35);}
+.login-logo{text-align:center;margin-bottom:24px;}
+.login-logo-icon{width:60px;height:60px;background:var(--primario);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;font-size:28px;margin-bottom:10px;box-shadow:0 8px 24px rgba(192,57,43,.4);}
+.login-logo h1{font-size:17px;font-weight:700;}
+.login-logo p{font-size:11px;color:var(--texto-suave);margin-top:2px;}
+.role-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:20px;}
+.role-pill{padding:10px 6px;border:2px solid var(--borde);border-radius:10px;background:transparent;cursor:pointer;text-align:center;font-family:'DM Sans',sans-serif;font-size:11px;font-weight:700;color:var(--texto-suave);transition:all .2s;}
+.role-pill .rp-icon{display:block;font-size:22px;margin-bottom:4px;}
+.role-pill:hover{border-color:var(--primario);color:var(--primario);}
+.role-pill.sel{border-color:var(--primario);background:#f4f4f6;color:var(--primario);}
+.lin{width:100%;padding:12px 14px;border:1.5px solid var(--borde);border-radius:10px;font-family:'DM Sans',sans-serif;font-size:14px;color:var(--texto);outline:none;margin-bottom:10px;transition:border-color .2s;}
+.lin:focus{border-color:var(--primario);}
+.login-btn{width:100%;padding:13px;background:var(--primario);color:white;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-size:15px;font-weight:700;cursor:pointer;transition:background .2s;}
+.login-btn:hover{background:var(--primario-oscuro);}
+.login-btn:disabled{background:#aaa;cursor:not-allowed;}
+.login-err{background:#ececee;border:1px solid var(--rojo);border-radius:8px;padding:10px 14px;font-size:13px;color:#6b1212;margin-bottom:10px;display:none;}
+.login-hint{margin-top:14px;padding:11px;background:#f4f4f6;border-radius:8px;font-size:11px;color:#6b1212;line-height:1.6;}
+
+/* ── LAYOUT ── */
+.layout{display:flex;min-height:100vh;}
+.sidebar{width:240px;background:var(--primario-oscuro);display:flex;flex-direction:column;padding:24px 14px;position:sticky;top:0;height:100vh;flex-shrink:0;overflow-y:auto;}
+.logo{display:flex;align-items:center;gap:10px;padding:0 8px 22px;border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:20px;}
+.logo-icon{width:36px;height:36px;background:var(--primario-claro);border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:16px;}
+.logo-text{color:white;font-size:12px;font-weight:700;line-height:1.3;}
+.logo-sub{color:rgba(255,255,255,.4);font-size:10px;}
+.nav-lbl{color:rgba(255,255,255,.3);font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;padding:0 10px;margin:16px 0 6px;}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;border:none;border-radius:10px;background:transparent;color:rgba(255,255,255,.5);font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;cursor:pointer;transition:all .2s;text-align:left;margin-bottom:3px;}
+.nav-btn:hover{background:rgba(255,255,255,.07);color:white;}
+.nav-btn.active{background:rgba(255,255,255,.13);color:white;}
+.nav-icon{font-size:15px;width:20px;text-align:center;}
+.sidebar-footer{margin-top:auto;padding-top:14px;border-top:1px solid rgba(255,255,255,.1);}
+.user-hint{background:rgba(255,255,255,.06);border-radius:10px;padding:11px;color:rgba(255,255,255,.5);font-size:11px;line-height:1.5;}
+.user-hint strong{color:rgba(255,255,255,.85);display:block;margin-bottom:2px;}
+
+/* ── MAIN ── */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+.topbar{background:white;padding:14px 24px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--borde);position:sticky;top:0;z-index:50;}
+.topbar-title{font-size:16px;font-weight:700;}
+.topbar-right{display:flex;align-items:center;gap:10px;}
+.topbar-date{font-family:'Space Mono',monospace;font-size:11px;color:var(--texto-suave);background:var(--gris-bg);padding:5px 11px;border-radius:20px;}
+.session-badge{background:var(--gris-bg);border-radius:20px;padding:5px 12px;font-size:12px;font-weight:700;}
+.btn-logout{padding:6px 12px;border:1.5px solid var(--borde);border-radius:8px;background:transparent;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:700;color:var(--rojo);cursor:pointer;transition:all .2s;}
+.btn-logout:hover{background:#ececee;border-color:var(--rojo);}
+
+/* ── TIMER ── */
+.timer-banner{background:linear-gradient(135deg,#8b1a1a,#6b1212);padding:18px 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;}
+.timer-time{font-family:'Space Mono',monospace;font-size:2.6em;font-weight:700;color:white;letter-spacing:4px;min-width:110px;}
+.timer-info{color:rgba(255,255,255,.7);font-size:12px;}
+.timer-status-txt{color:white;font-weight:600;font-size:14px;margin-bottom:2px;}
+.progress-wrap{flex:1;min-width:160px;}
+.progress-bar{height:7px;background:rgba(255,255,255,.15);border-radius:99px;overflow:hidden;margin-bottom:5px;}
+.progress-fill{height:100%;background:var(--primario-claro);border-radius:99px;transition:width 1s linear;}
+.progress-label{color:rgba(255,255,255,.55);font-size:11px;}
+.timer-actions{display:flex;gap:8px;margin-left:auto;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.blink{animation:blink 1s infinite;}
+
+/* ── CONTENT ── */
+.content{padding:22px 24px;flex:1;overflow-y:auto;}
+
+/* ── CARDS ── */
+.card{background:white;border-radius:var(--radius);padding:22px;margin-bottom:18px;box-shadow:var(--shadow-sm);border:1px solid var(--borde);}
+.card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid var(--borde);}
+.card-title{font-size:14px;font-weight:700;display:flex;align-items:center;gap:8px;}
+
+/* ── STATS ── */
+.stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:18px;}
+.stat-box{background:white;border:1px solid var(--borde);border-radius:var(--radius-sm);padding:14px;text-align:center;}
+.stat-num{font-family:'Space Mono',monospace;font-size:1.9em;font-weight:700;color:var(--primario);}
+.stat-lbl{font-size:10px;color:var(--texto-suave);margin-top:3px;text-transform:uppercase;letter-spacing:.5px;}
+.stat-box.red .stat-num{color:var(--rojo);}
+.stat-box.amber .stat-num{color:var(--naranja);}
+.stat-box.blue .stat-num{color:var(--azul);}
+
+/* ── BUTTONS ── */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border:none;border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;font-weight:700;cursor:pointer;transition:all .2s;white-space:nowrap;}
+.btn:active{transform:scale(.97);}
+.btn-primary{background:var(--primario);color:white;}
+.btn-primary:hover{background:var(--primario-oscuro);}
+.btn-success{background:#8b1a1a;color:white;}
+.btn-success:hover{background:#6b1212;}
+.btn-danger{background:var(--rojo);color:white;}
+.btn-danger:hover{background:#8b1a1a;}
+.btn-orange{background:var(--naranja);color:white;}
+.btn-azul{background:var(--azul);color:white;}
+.btn-azul:hover{background:#2471a3;}
+.btn-morado{background:var(--morado);color:white;}
+.btn-ghost{background:transparent;color:var(--texto-suave);border:1.5px solid var(--borde);}
+.btn-ghost:hover{border-color:var(--primario);color:var(--primario);}
+.btn-lg{padding:12px 22px;font-size:14px;width:100%;justify-content:center;}
+.btn-sm{padding:5px 11px;font-size:12px;}
+
+/* ── FORMS ── */
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.form-group{display:flex;flex-direction:column;gap:5px;}
+.form-group label{font-size:11px;font-weight:700;color:var(--texto-suave);text-transform:uppercase;letter-spacing:.5px;}
+.form-group input,.form-group select,.form-group textarea{padding:9px 12px;border:1.5px solid var(--borde);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;color:var(--texto);background:white;transition:border-color .2s;outline:none;}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--primario);}
+.form-group.full{grid-column:1/-1;}
+.input{width:100%;padding:9px 12px;border:1.5px solid var(--borde);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;color:var(--texto);background:white;transition:border-color .2s;outline:none;}
+.input:focus{border-color:var(--primario);}
+
+/* ── STUDENTS GRID ── */
+.students-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;max-height:460px;overflow-y:auto;padding-right:4px;}
+.students-grid::-webkit-scrollbar{width:4px;}
+.students-grid::-webkit-scrollbar-thumb{background:var(--borde);border-radius:4px;}
+.student-card{background:var(--gris-bg);border-radius:var(--radius);padding:14px;text-align:center;border:2px solid transparent;transition:all .2s;}
+.student-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-md);}
+.student-card.presente{background:#f4f4f6;border-color:#8b1a1a;}
+.student-card.ausente{background:#ececee;border-color:var(--rojo);}
+.student-card.justificado{background:#eaf4fb;border-color:var(--azul);}
+.student-name{font-size:12px;font-weight:700;color:var(--texto);margin-bottom:2px;}
+.student-grade{font-size:10px;color:var(--naranja);font-weight:700;margin-bottom:7px;}
+.qr-container{width:80px;height:80px;margin:6px auto;background:white;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;overflow:hidden;}
+
+/* ── BADGES ── */
+.badge{display:inline-block;padding:3px 9px;border-radius:99px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-top:5px;}
+.badge-green{background:#8b1a1a;color:white;}
+.badge-red{background:var(--rojo);color:white;}
+.badge-amber{background:#f39c12;color:white;}
+.badge-blue{background:var(--azul);color:white;}
+.badge-morado{background:var(--morado);color:white;}
+.badge-alerta{background:#8b1a1a;color:white;animation:blink .8s infinite;}
+
+/* ── TABLE ── */
+.table-wrap{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;font-size:12px;}
+th{background:var(--gris-bg);font-weight:700;color:var(--texto-suave);text-transform:uppercase;font-size:10px;letter-spacing:.5px;padding:9px 11px;text-align:left;}
+td{padding:9px 11px;border-bottom:1px solid var(--borde);color:var(--texto);}
+tr:last-child td{border-bottom:none;}
+tr.row-presente{background:#f4f4f6;}
+tr.row-ausente{background:#ececee;}
+tr.row-tardanza{background:#fef9ec;}
+tr.row-justificado{background:#eaf4fb;}
+tr.row-alerta{background:#ececee;border-left:3px solid var(--rojo);}
+
+/* ── FILTERS ── */
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
+.filters select,.filters input{padding:7px 10px;border:1.5px solid var(--borde);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:12px;color:var(--texto);background:white;outline:none;cursor:pointer;}
+
+/* ── MODAL ── */
+.modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;justify-content:center;align-items:center;backdrop-filter:blur(4px);}
+.modal.open{display:flex;}
+.modal-box{background:white;border-radius:var(--radius);padding:24px;width:420px;max-width:96vw;max-height:90vh;overflow-y:auto;box-shadow:var(--shadow-lg);}
+.modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;padding-bottom:12px;border-bottom:1px solid var(--borde);}
+.modal-title{font-size:15px;font-weight:700;}
+.modal-close{background:var(--gris-bg);border:none;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:13px;font-weight:700;color:var(--texto-suave);}
+
+/* ── NOTIFICATIONS ── */
+.notif-stack{position:fixed;bottom:22px;right:22px;display:flex;flex-direction:column;gap:8px;z-index:2000;max-width:340px;}
+.notif{padding:12px 16px;border-radius:var(--radius-sm);font-size:13px;font-weight:500;box-shadow:var(--shadow-md);animation:slideRight .3s ease;display:flex;align-items:center;gap:8px;}
+.notif-success{background:#f4f4f6;border-left:3px solid #8b1a1a;color:#6b1212;}
+.notif-error{background:#ececee;border-left:3px solid var(--rojo);color:#6b1212;}
+.notif-warning{background:#fef9ec;border-left:3px solid #f39c12;color:#784212;}
+.notif-info{background:#eaf4fb;border-left:3px solid var(--azul);color:#1a5276;}
+@keyframes slideRight{from{transform:translateX(100%);opacity:0}to{transform:none;opacity:1}}
+
+/* ── ALERTA URGENTE ── */
+.alerta-banner{background:linear-gradient(135deg,#8b1a1a,#a52320);color:white;padding:14px 20px;border-radius:12px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;animation:blink .8s 3;}
+.alerta-banner-txt{font-size:14px;font-weight:700;}
+.alerta-banner-sub{font-size:12px;opacity:.85;margin-top:3px;}
+
+/* ── INFO BOX ── */
+.info-box{background:#f4f4f6;border:1px solid #f1948a;border-radius:var(--radius-sm);padding:13px 15px;font-size:13px;color:#6b1212;margin-bottom:12px;line-height:1.6;}
+.info-box.warn{background:#fef9ec;border-color:#f39c12;color:#784212;}
+.info-box.alert{background:#ececee;border-color:var(--rojo);color:#6b1212;}
+.info-box strong{display:block;margin-bottom:3px;}
+
+/* ── JUSTIFICACION CARD ── */
+.justif-card{border:1.5px solid var(--borde);border-radius:12px;padding:16px;margin-bottom:12px;background:white;transition:box-shadow .2s;}
+.justif-card:hover{box-shadow:var(--shadow-md);}
+.justif-card.alerta{border-color:var(--rojo);background:#fff8f8;}
+.justif-card.pendiente{border-color:#f39c12;}
+.justif-card.aprobado{border-color:#8b1a1a;background:#f4f4f6;}
+.justif-card.rechazado{border-color:var(--rojo);background:#ececee;}
+.justif-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;}
+.justif-nombre{font-weight:700;font-size:14px;}
+.justif-sub{font-size:11px;color:var(--texto-suave);margin-top:2px;}
+.justif-motivo{background:var(--gris-bg);border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:10px;line-height:1.6;}
+.justif-evidencia{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--azul);cursor:pointer;margin-bottom:10px;}
+.justif-evidencia img{width:60px;height:60px;object-fit:cover;border-radius:8px;border:1px solid var(--borde);}
+.justif-actions{display:flex;gap:8px;flex-wrap:wrap;}
+
+/* ── PADRE PANEL ── */
+.hijo-card{background:var(--gris-bg);border-radius:12px;padding:14px 16px;margin-bottom:12px;border:1.5px solid var(--borde);}
+.hijo-card.presente{background:#f4f4f6;border-color:#8b1a1a;}
+.hijo-card.ausente{background:#ececee;border-color:var(--rojo);}
+.hijo-nombre{font-weight:700;font-size:15px;}
+.hijo-grado{font-size:12px;color:var(--texto-suave);margin-top:2px;}
+
+/* ── MOTIVOS JUSTIFICACIÓN ── */
+.motivo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0;}
+.motivo-btn{padding:12px 8px;border:2px solid var(--borde);border-radius:10px;background:transparent;cursor:pointer;text-align:center;font-family:'DM Sans',sans-serif;font-size:11px;font-weight:700;color:var(--texto-suave);transition:all .2s;}
+.motivo-btn .m-icon{display:block;font-size:22px;margin-bottom:4px;}
+.motivo-btn:hover{border-color:var(--primario);color:var(--primario);}
+.motivo-btn.sel{border-color:var(--primario);background:#f4f4f6;color:var(--primario);}
+.motivo-btn.sel.alerta-sel{border-color:var(--rojo);background:#ececee;color:var(--rojo);}
+
+/* ── UPLOAD ZONE ── */
+.upload-zone{border:2px dashed var(--borde);border-radius:12px;padding:22px;text-align:center;cursor:pointer;transition:all .2s;background:var(--gris-bg);margin:10px 0;display:block;}
+.upload-zone:hover{border-color:var(--primario);background:#f4f4f6;}
+.upload-preview{margin-top:10px;display:none;}
+.upload-preview img{max-width:100%;max-height:180px;border-radius:10px;border:2px solid var(--borde);object-fit:contain;}
+
+/* ── USERS ── */
+.user-row{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-radius:10px;border:1px solid var(--borde);margin-bottom:8px;background:var(--gris-bg);}
+.user-row-name{font-weight:700;font-size:13px;}
+.user-row-sub{font-size:11px;color:var(--texto-suave);margin-top:2px;}
+.role-tag{display:inline-block;padding:2px 9px;border-radius:99px;font-size:10px;font-weight:700;text-transform:uppercase;}
+.role-tag-admin{background:#6b1212;color:white;}
+.role-tag-auxiliar{background:#2980b9;color:white;}
+.role-tag-tutor{background:#8e44ad;color:white;}
+
+/* ── GRAFICOS ── */
+.chart-wrap{position:relative;height:240px;margin-top:10px;}
+
+/* ── FIREBASE STATUS ── */
+.fb-status{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:700;padding:3px 9px;border-radius:99px;background:#f4f4f6;color:#6b1212;}
+.fb-status.offline{background:#ececee;color:#6b1212;}
+.fb-dot{width:6px;height:6px;border-radius:50%;background:#8b1a1a;}
+.fb-status.offline .fb-dot{background:var(--rojo);}
+
+/* ── RESPONSIVE ── */
+@media(max-width:768px){
+  .sidebar{display:none;}
+  .form-grid{grid-template-columns:1fr;}
+  .content{padding:14px;}
+  .topbar{padding:12px 14px;}
+  .timer-actions{width:100%;}
+  .timer-actions .btn{flex:1;justify-content:center;}
+  .motivo-grid{grid-template-columns:repeat(3,1fr);}
+  .mobile-nav{display:flex!important;position:fixed;bottom:0;left:0;right:0;background:var(--primario-oscuro);z-index:100;padding:8px 0 env(safe-area-inset-bottom,8px);}
+  .mobile-nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:7px 4px;background:none;border:none;color:rgba(255,255,255,.5);font-family:'DM Sans',sans-serif;font-size:10px;font-weight:700;cursor:pointer;}
+  .mobile-nav-btn.active{color:var(--primario-claro);}
+  .mobile-nav-btn span{font-size:18px;}
+  body{padding-bottom:68px;}
+}
+@media(min-width:769px){.mobile-nav{display:none;}}
+.hide{display:none!important;}
+@keyframes scanAnim{0%{top:0}50%{top:calc(100% - 2px)}100%{top:0}}
+@keyframes fadeOut{0%{opacity:1}100%{opacity:0}}
+
+/* Scanner tabs */
+.scan-tab-bar{display:flex;border-bottom:2px solid var(--borde);background:white;}
+.scan-tab{flex:1;padding:11px;border:none;background:transparent;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:700;cursor:pointer;color:var(--texto-suave);border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .2s;}
+.scan-tab.active{color:var(--primario);border-bottom-color:var(--primario);}
+</style>
+</head>
+<body>
+
+<!-- ══ BANNER INSTALACIÓN iOS / Safari ══ -->
+<div id="iosBanner">
+  <div class="ios-banner-top">
+    <div class="ios-banner-title">📲 Instalar AsistenciaQR en iPhone</div>
+    <button class="ios-banner-close" onclick="cerrarBannerIos()">✕</button>
+  </div>
+  <div class="ios-banner-steps">
+    <b>Para instalar en iPhone / iPad:</b><br>
+    1️⃣ Toca el botón <b>Compartir ⬆️</b> en la barra inferior de Safari<br>
+    2️⃣ Elige <b>"Agregar a pantalla de inicio"</b><br>
+    3️⃣ Toca <b>Agregar</b> — aparecerá como ícono en tu pantalla
+  </div>
+</div>
+
+<!-- ══ SPLASH ══ -->
+<div id="splashScreen">
+  <div class="splash-icon">📚</div>
+  <div class="splash-txt">Conectando con Firebase…</div>
+</div>
+
+<!-- ══════ PANTALLA LOGIN ══════ -->
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="login-logo-icon"><img src="logo.jpeg" style="width:52px;height:52px;object-fit:cover;border-radius:10px;"></div>
+      <h1 style="font-size:14px;line-height:1.3;">IE N.° 0162 SAN JOSÉ OBRERO<br><span style="font-size:11px;font-weight:500;">UGEL 05 - SJL</span></h1>
+      <p style="font-size:10px;color:var(--texto-suave);margin-top:4px;">Sistema AsistenciaQR — Firebase</p>
+    </div>
+    <div class="role-grid">
+      <button class="role-pill sel" onclick="selRol('admin')" id="rp_admin"><span class="rp-icon">👑</span>Administrador</button>
+      <button class="role-pill" onclick="selRol('tutor')" id="rp_tutor"><span class="rp-icon">📖</span>Tutor</button>
+      <button class="role-pill" onclick="selRol('auxiliar')" id="rp_auxiliar"><span class="rp-icon">🛡️</span>Auxiliar</button>
+      <button class="role-pill" onclick="selRol('padre')" id="rp_padre"><span class="rp-icon">👪</span>Padre de Familia</button>
+    </div>
+    <div class="login-err" id="loginErr"></div>
+    <div id="loginCredDiv">
+      <input type="email" class="lin" id="loginUser" placeholder="Correo electrónico" autocomplete="username" onkeydown="if(event.key==='Enter')document.getElementById('loginPass').focus()">
+      <input type="password" class="lin" id="loginPass" placeholder="Contraseña" autocomplete="current-password" onkeydown="if(event.key==='Enter')hacerLogin()">
+    </div>
+    <div id="loginPadreDiv" class="hide">
+      <input type="text" class="lin" id="loginDNI" placeholder="DNI (8 dígitos) o carnet extranjería" maxlength="12" onkeydown="if(event.key==='Enter')hacerLoginPadre()">
+    </div>
+    <button class="login-btn" id="loginBtn" onclick="hacerLogin()">🔐 Ingresar</button>
+    <div class="login-hint" id="loginHint" style="display:none;">
+      Ingresa con tu correo y contraseña institucional.<br>
+      <span style="color:#555">Contacta al administrador si no tienes acceso.</span>
+    </div>
+  </div>
+</div>
+
+<!-- ══════ APP PRINCIPAL ══════ -->
+<div class="layout" id="appLayout" style="display:none;">
+  <aside class="sidebar" id="sidebar">
+    <div class="logo">
+      <div class="logo-icon"><img src="logo.jpeg" style="width:100%;height:100%;object-fit:cover;border-radius:9px;"></div>
+      <div>
+        <div class="logo-text">IE N.° 0162 SAN JOSÉ OBRERO</div>
+        <div class="logo-sub">SJO — SECUNDARIA</div>
+      </div>
+    </div>
+    <div style="padding:0 8px 14px;margin-bottom:8px;border-bottom:1px solid rgba(255,255,255,.1);">
+      <div class="fb-status" id="fbStatus">
+        <div class="fb-dot"></div> Firebase Online
+      </div>
+    </div>
+    <div class="nav-lbl">Menú</div>
+    <button class="nav-btn" id="nav_admin" onclick="irPanel('admin')"><span class="nav-icon">👑</span> Administración</button>
+    <button class="nav-btn" id="nav_asistencia" onclick="irPanel('asistencia')"><span class="nav-icon">📋</span> Asistencia</button>
+    <button class="nav-btn" id="nav_justificaciones" onclick="irPanel('justificaciones')"><span class="nav-icon">📄</span> Justificaciones <span id="navAlertaBadge" style="display:none;background:var(--rojo);color:white;border-radius:99px;padding:1px 7px;font-size:10px;margin-left:4px;">!</span></button>
+    <button class="nav-btn" id="nav_reportes" onclick="irPanel('reportes')"><span class="nav-icon">📊</span> Reportes</button>
+    <button class="nav-btn" id="nav_padre" onclick="irPanel('padre')"><span class="nav-icon">👪</span> Mi Hijo</button>
+    <div class="sidebar-footer">
+      <div class="user-hint" id="userHint"><strong>—</strong></div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-title" id="topbarTitle">Panel</div>
+      <div class="topbar-right">
+        <div class="session-badge" id="sessionBadge">—</div>
+        <div class="topbar-date" id="topbarDate"></div>
+        <button id="btnInstalarApp" onclick="instalarApp()" style="display:none;padding:6px 12px;border:1.5px solid var(--primario);border-radius:8px;background:var(--primario);font-family:'DM Sans',sans-serif;font-size:12px;font-weight:700;color:white;cursor:pointer;align-items:center;gap:5px;">📲 Instalar App</button>
+        <button class="btn-logout" onclick="cerrarSesion()">🚪 Salir</button>
+      </div>
+    </div>
+
+    <div class="timer-banner" id="timerBanner">
+      <div class="timer-block">
+        <div class="timer-time" id="timerDisplay">--:--</div>
+        <div class="timer-info">
+          <div class="timer-status-txt" id="timerStatus">Sin sesión activa</div>
+          <div>Control de entrada</div>
+        </div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+        <div class="progress-label" id="progressLabel">Sin sesión activa</div>
+      </div>
+      <div class="timer-actions">
+        <button class="btn btn-success" onclick="iniciarSesion()">▶ Iniciar (60 min)</button>
+        <button class="btn btn-danger" onclick="finalizarYMarcarAusentes()">■ Finalizar y marcar ausentes</button>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- ══ PANEL ADMIN ══ -->
+      <div id="panel_admin" class="hide">
+        <!-- FIX-SEC-10: Aviso de configuración pendiente para el administrador -->
+        <div id="avisoSeguridad" class="info-box alert" style="margin-bottom:16px;background:#ececee;border:2px solid #8b1a1a;border-radius:10px;padding:14px 18px;">
+          <strong style="color:#6b1212;">🔐 Configuración de seguridad requerida</strong><br>
+          <span style="font-size:12px;color:#7a4f4f;">
+            Para proteger los datos del sistema, realiza estas acciones en
+            <a href="https://console.firebase.google.com" target="_blank" style="color:#8b1a1a;">Firebase Console</a>:
+            <br>① Configura las <strong>Firestore Security Rules</strong> (ver comentario en el código fuente).
+            <br>② Crea el índice <strong>estudiantes → dniPadre</strong> en Firestore → Indexes.
+            <br>③ Activa el plan <strong>Blaze</strong> si tienes más de 800 estudiantes activos.
+          </span>
+          <button onclick="document.getElementById('avisoSeguridad').style.display='none'" style="float:right;background:none;border:none;font-size:16px;cursor:pointer;color:#6b1212;margin-top:-28px;">✕</button>
+        </div>
+        <div class="stats-row" id="statsRow">
+          <div class="stat-box"><div class="stat-num" id="statTotal">0</div><div class="stat-lbl">Estudiantes</div></div>
+          <div class="stat-box"><div class="stat-num" id="statPresentes">—</div><div class="stat-lbl">Presentes hoy</div></div>
+          <div class="stat-box red"><div class="stat-num" id="statAusentes">—</div><div class="stat-lbl">Ausentes</div></div>
+          <div class="stat-box amber"><div class="stat-num" id="statPct">—</div><div class="stat-lbl">% Asistencia</div></div>
+          <div class="stat-box" style="border-top:3px solid #f39c12;"><div class="stat-num" id="statTardanzas">0</div><div class="stat-lbl">Tardanzas hoy</div></div>
+          <div class="stat-box blue"><div class="stat-num" id="statJustif">0</div><div class="stat-lbl">Justif. pendientes</div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">👥 Gestión de Usuarios</span>
+            <button class="btn btn-primary btn-sm" onclick="abrirModalUsuario()">➕ Nuevo Usuario</button>
+          </div>
+          <div id="listaUsuarios"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><span class="card-title">➕ Agregar Estudiante</span></div>
+          <div class="form-grid">
+            <div class="form-group full"><label>Nombre completo *</label><input type="text" id="sNombre" placeholder="Apellidos y nombres"></div>
+            <div class="form-group"><label>Grado *</label>
+              <select id="sGrado"><option>1ro</option><option>2do</option><option>3ro</option><option>4to</option><option>5to</option></select>
+            </div>
+            <div class="form-group"><label>Sección *</label>
+              <select id="sSeccion"><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option></select>
+            </div>
+          </div>
+          <div class="form-group" style="margin-top:8px;"><label>DNI del Apoderado *</label><input type="text" id="sDNI" placeholder="DNI u 8 dígitos o carnet" maxlength="12"></div>
+          <div class="form-group" style="margin-top:8px;"><label>WhatsApp apoderado</label><input type="text" id="sTelefono" placeholder="51987654321"></div>
+          <button class="btn btn-primary" style="margin-top:14px;" onclick="agregarEstudiante()">➕ Agregar Estudiante</button>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">👨‍🎓 Estudiantes Registrados</span>
+            <button class="btn btn-sm" style="background:#8b1a1a;color:white;" onclick="imprimirQR()">🖨 Imprimir QR</button>
+          </div>
+          <div class="filters">
+            <select id="fGradoAdmin" onchange="renderEstudiantes()"><option value="">Todos los grados</option><option value="1ro">1ro</option><option value="2do">2do</option><option value="3ro">3ro</option><option value="4to">4to</option><option value="5to">5to</option></select>
+            <select id="fSecAdmin" onchange="renderEstudiantes()"><option value="">Todas las secciones</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option></select>
+          </div>
+          <div id="listaEstudiantes" class="students-grid"></div>
+        </div>
+      </div>
+
+      <!-- ══ PANEL ASISTENCIA ══ -->
+      <div id="panel_asistencia" class="hide">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-bottom:18px;">
+          <div class="card" style="margin:0;text-align:center;padding:18px;">
+            <div style="font-size:2em;margin-bottom:6px;">📷</div>
+            <div style="font-weight:700;font-size:14px;margin-bottom:4px;">Escanear QR</div>
+            <div style="font-size:12px;color:var(--texto-suave);margin-bottom:12px;">Usa la cámara o foto del QR</div>
+            <button class="btn btn-success btn-lg" onclick="abrirScanner()">Abrir escáner</button>
+          </div>
+          <div class="card" style="margin:0;padding:18px;">
+            <div style="font-size:2em;margin-bottom:6px;text-align:center;">🔍</div>
+            <div style="font-weight:700;font-size:14px;margin-bottom:4px;">Buscar por nombre</div>
+            <input type="text" id="buscarNombre" placeholder="Nombre del estudiante…" oninput="buscarPorNombre()" style="width:100%;padding:9px 11px;border:1.5px solid var(--borde);border-radius:8px;font-size:13px;font-family:inherit;outline:none;margin-bottom:8px;">
+            <div id="resBusqueda" style="max-height:160px;overflow-y:auto;"></div>
+          </div>
+          <div class="card" style="margin:0;padding:18px;">
+            <div style="font-size:2em;margin-bottom:6px;text-align:center;">📱</div>
+            <div style="font-weight:700;font-size:14px;margin-bottom:4px;">Buscar por DNI apoderado</div>
+            <div style="display:flex;gap:8px;">
+              <input type="text" id="dniBusq" placeholder="DNI u carnet de extranjería" maxlength="12" style="flex:1;padding:9px 11px;border:1.5px solid var(--borde);border-radius:8px;font-size:13px;font-family:inherit;outline:none;" onkeydown="if(event.key==='Enter')buscarPorDNI()">
+              <button class="btn btn-primary btn-sm" onclick="buscarPorDNI()">Buscar</button>
+            </div>
+            <div id="resDNI" style="margin-top:10px;max-height:130px;overflow-y:auto;"></div>
+          </div>
+        </div>
+        <div id="alertasContainer"></div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">📋 Estado de Asistencia — Hoy</span>
+            <div class="filters" style="margin:0;">
+              <select id="fGradoAux"><option value="">Todos</option><option value="1ro">1ro</option><option value="2do">2do</option><option value="3ro">3ro</option><option value="4to">4to</option><option value="5to">5to</option></select>
+              <select id="fSecAux"><option value="">Todas</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option></select>
+              <button class="btn btn-primary btn-sm" onclick="renderListaAsistencia()">🔍 Buscar</button>
+            </div>
+          </div>
+          <div id="listaAsistencia" class="students-grid"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">📑 Registro del Día</span>
+            <div class="filters" style="margin:0;">
+              <select id="fGradoTabla" onchange="cargarTablaAsistencia()">
+                <option value="">Todos los grados</option>
+                <option value="1ro">1ro</option>
+                <option value="2do">2do</option>
+                <option value="3ro">3ro</option>
+                <option value="4to">4to</option>
+                <option value="5to">5to</option>
+              </select>
+              <select id="fSecTabla" onchange="cargarTablaAsistencia()">
+                <option value="">Todas las secciones</option>
+                <option value="A">A</option>
+                <option value="B">B</option>
+                <option value="C">C</option>
+                <option value="D">D</option>
+                <option value="E">E</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table><thead><tr><th>Estudiante</th><th>Grado</th><th>Sección</th><th>Hora</th><th>Estado</th><th>Acciones</th></tr></thead>
+            <tbody id="tablaAsistencia"></tbody></table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PANEL JUSTIFICACIONES ══ -->
+      <div id="panel_justificaciones" class="hide">
+        <div id="alertasBanner"></div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">📄 Justificaciones de Inasistencia</span><div style="display:flex;gap:8px;"><button class="btn btn-sm" style="background:#6b1212;color:white;" onclick="exportarJustificacionesExcel()">📊 Excel</button><button class="btn btn-sm" style="background:#c0392b;color:white;" onclick="eliminarJustificacionesFiltradas()">🗑 Eliminar filtradas</button></div>
+            <div class="filters" style="margin:0;">
+              <select id="fJustifEstado" onchange="renderJustificaciones()"><option value="">Todos los estados</option><option value="pendiente">⏳ Pendiente</option><option value="aprobado">✅ Aprobado</option><option value="rechazado">❌ Rechazado</option><option value="alerta">🚨 Alerta</option></select>
+              <select id="fJustifGrado" onchange="renderJustificaciones()"><option value="">Todos los grados</option><option value="1ro">1ro</option><option value="2do">2do</option><option value="3ro">3ro</option><option value="4to">4to</option><option value="5to">5to</option></select>
+            </div>
+          </div>
+          <div id="listaJustificaciones"></div>
+        </div>
+      </div>
+
+      <!-- ══ PANEL REPORTES ══ -->
+      <div id="panel_reportes" class="hide">
+        <div class="card">
+          <div class="card-header"><span class="card-title">📊 Reportes y Exportación</span></div>
+          <div class="filters">
+            <select id="rGrado"><option value="">Todos los grados</option><option value="1ro">1ro</option><option value="2do">2do</option><option value="3ro">3ro</option><option value="4to">4to</option><option value="5to">5to</option></select>
+            <select id="rSeccion"><option value="">Todas las secciones</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option></select>
+            <input type="date" id="rFechaInicio" style="padding:7px 10px;border:1.5px solid var(--borde);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:12px;outline:none;">
+            <input type="date" id="rFechaFin" style="padding:7px 10px;border:1.5px solid var(--borde);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:12px;outline:none;">
+            <button class="btn btn-primary btn-sm" onclick="generarReporte()">🔍 Buscar</button>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;">
+            <button class="btn btn-success btn-sm" onclick="exportarExcel()">📥 Exportar Excel</button>
+            <button class="btn btn-azul btn-sm" onclick="exportarPDF()">📄 Exportar PDF</button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;">
+            <div class="card" style="margin:0;">
+              <div class="card-title" style="margin-bottom:10px;">📈 Asistencia por día</div>
+              <div class="chart-wrap"><canvas id="chartDia"></canvas></div>
+            </div>
+            <div class="card" style="margin:0;">
+              <div class="card-title" style="margin-bottom:10px;">📊 Asistencia por grado (hoy)</div>
+              <div class="chart-wrap"><canvas id="chartGrado"></canvas></div>
+            </div>
+          </div>
+          <div class="table-wrap" style="margin-top:18px;">
+            <table><thead><tr><th>Estudiante</th><th>Grado</th><th>Sección</th><th>Fecha</th><th>Estado</th><th>Justificación</th></tr></thead>
+            <tbody id="tablaReporte"></tbody></table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ PANEL PADRE ══ -->
+      <div id="panel_padre" class="hide">
+        <div id="padreLoginDiv" class="card">
+          <div class="card-header"><span class="card-title">👪 Portal del Apoderado</span></div>
+          <div class="info-box"><strong>Consulta la asistencia de tu hijo(a)</strong>Ingresa tu DNI para ver el estado de asistencia.</div>
+          <div style="display:flex;gap:8px;">
+            <input type="text" id="padreInputDNI" placeholder="DNI u carnet de extranjería" maxlength="12" style="flex:1;padding:10px 12px;border:1.5px solid var(--borde);border-radius:8px;font-size:14px;font-family:inherit;outline:none;" onkeydown="if(event.key==='Enter')consultarPadre()">
+            <button class="btn btn-primary" onclick="consultarPadre()">Consultar</button>
+          </div>
+        </div>
+        <div id="padreInfoDiv" class="hide">
+          <div class="info-box" id="padreApodInfo"></div>
+          <div id="padreHijosDiv"></div>
+          <button class="btn btn-ghost btn-sm" onclick="cerrarSesionPadre()">← Volver</button>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /layout -->
+
+<!-- MOBILE NAV -->
+<nav class="mobile-nav" style="display:none;">
+  <button class="mobile-nav-btn" id="mn_admin" onclick="irPanel('admin')"><span>👑</span>Admin</button>
+  <button class="mobile-nav-btn" id="mn_asistencia" onclick="irPanel('asistencia')"><span>📋</span>Asistencia</button>
+  <button class="mobile-nav-btn" id="mn_justificaciones" onclick="irPanel('justificaciones')"><span>📄</span>Justif.</button>
+  <button class="mobile-nav-btn" id="mn_reportes" onclick="irPanel('reportes')"><span>📊</span>Reportes</button>
+  <button class="mobile-nav-btn" id="mn_padre" onclick="irPanel('padre')"><span>👪</span>Mi Hijo</button>
+</nav>
+
+<!-- ══ SCANNER MODAL ══ -->
+<div id="scannerModal" class="modal">
+  <div class="modal-box" style="padding:0;overflow:hidden;border-radius:16px;">
+    <div class="modal-header" style="padding:16px 18px;">
+      <span class="modal-title">📷 Registrar Asistencia</span>
+      <button class="modal-close" onclick="cerrarScanner()">✕</button>
+    </div>
+    <div class="scan-tab-bar">
+      <button class="scan-tab active" id="stCamera" onclick="switchScanTab('camera')">📷 Cámara</button>
+      <button class="scan-tab" id="stPhoto" onclick="switchScanTab('photo')">🖼 Foto</button>
+      <button class="scan-tab" id="stManual" onclick="switchScanTab('manual')">⌨️ Manual</button>
+    </div>
+    <div id="spCamera" style="padding:14px;">
+      <div id="scannerView" style="position:relative;background:#000;border-radius:12px;overflow:hidden;aspect-ratio:1;">
+        <video id="scannerVideo" style="width:100%;height:100%;object-fit:cover;" playsinline muted></video>
+        <div style="position:absolute;inset:0;border:2px solid rgba(192,57,43,.5);border-radius:12px;pointer-events:none;"></div>
+        <div style="position:absolute;left:15%;right:15%;top:0;height:2px;background:var(--primario-claro);opacity:.8;animation:scanAnim 2s linear infinite;"></div>
+      </div>
+      <div id="scanStatus" style="margin:8px 0;font-size:12px;color:var(--texto-suave);text-align:center;">Iniciando cámara…</div>
+      <div style="display:flex;gap:8px;margin-top:4px;">
+        <button class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;" onclick="flipCam()">🔄 Girar cámara</button>
+      </div>
+      <div id="camErrorBox" style="display:none;margin-top:10px;background:#ececee;border:1px solid var(--rojo);border-radius:10px;padding:13px;font-size:12px;color:#6b1212;line-height:1.7;">
+        <strong style="display:block;margin-bottom:5px;">🔒 No se pudo acceder a la cámara</strong>
+        1️⃣ Usa Chrome o Edge<br>2️⃣ Haz clic en 🔒 → Permisos → activar Cámara<br>3️⃣ O usa la pestaña <strong>Foto</strong> o <strong>Manual</strong>
+      </div>
+    </div>
+    <div id="spPhoto" style="display:none;padding:14px;">
+      <label for="photoInput" class="upload-zone">
+        <div style="font-size:2.2em;margin-bottom:8px;">📷</div>
+        <div style="font-weight:700;font-size:13px;margin-bottom:3px;">Toca para tomar foto o elegir de galería</div>
+      </label>
+      <input type="file" id="photoInput" accept="image/*" style="display:none;" onchange="procesarFotoQR(this)">
+      <div id="photoPreview" class="upload-preview"><img id="photoImg" alt=""><div id="photoResult" style="margin-top:8px;font-size:13px;font-weight:600;"></div></div>
+      <div id="photoStatus" style="margin-top:8px;font-size:12px;text-align:center;color:var(--texto-suave);"></div>
+    </div>
+    <div id="spManual" style="display:none;padding:14px;">
+      <div class="info-box warn"><strong>⌨️ Registro manual</strong>Para alumnos que olvidaron su QR. Busca por nombre y marca Presente o Ausente.</div>
+      <div class="form-group" style="margin-bottom:6px;"><label>Buscar alumno por nombre</label>
+        <div style="display:flex;gap:6px;">
+          <input type="text" id="manualInput" placeholder="Escribe el nombre del alumno…" style="flex:1;padding:10px 12px;border:1.5px solid var(--borde);border-radius:8px;font-size:14px;font-family:inherit;outline:none;" onkeydown="if(event.key==='Enter')procesarManual()">
+          <button class="btn btn-primary" onclick="procesarManual()">🔍</button>
+        </div>
+      </div>
+      <div id="manualResultados"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL USUARIO ══ -->
+<div id="modalUsuario" class="modal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title" id="modalUsuarioTit">Nuevo Usuario</span>
+      <button class="modal-close" onclick="cerrarModalUsuario()">✕</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div class="form-group"><label>Nombre completo *</label><input type="text" id="uNombre" placeholder="Ej: María García"></div>
+      <div class="form-group"><label>Correo electrónico *</label><input type="email" id="uEmail" placeholder="mgarcia@ie0162.edu.pe"></div>
+      <div class="form-group"><label>Contraseña * (mín. 6 caracteres)</label><input type="password" id="uPass" placeholder="Mínimo 6 caracteres" autocomplete="new-password"></div>
+      <div class="form-group"><label>Rol *</label>
+        <select id="uRol" onchange="toggleAsignacion()">
+          <option value="tutor">📖 Tutor</option>
+          <option value="auxiliar">🛡️ Auxiliar</option>
+          <option value="admin">👑 Administrador</option>
+        </select>
+      </div>
+      <div id="asignacionDiv">
+        <div class="form-group">
+          <label>Grados asignados (Ctrl+clic = múltiples)</label>
+          <select id="uGrados" multiple size="5" style="padding:6px;border:1.5px solid var(--borde);border-radius:8px;font-family:'DM Sans',sans-serif;font-size:13px;outline:none;width:100%;">
+            <option value="1ro">1ro Secundaria</option><option value="2do">2do Secundaria</option><option value="3ro">3ro Secundaria</option><option value="4to">4to Secundaria</option><option value="5to">5to Secundaria</option>
+          </select>
+          <small style="color:var(--texto-suave);font-size:10px;">Sin selección = todos los grados</small>
+        </div>
+        <div class="form-group">
+          <label>Secciones asignadas (Ctrl+clic = múltiples)</label>
+          <select id="uSecciones" multiple size="5" style="padding:6px;border:1.5px solid var(--borde);border-radius:8px;font-family:'DM Sans',sans-serif;font-size:13px;outline:none;width:100%;">
+            <option value="A">Sección A</option><option value="B">Sección B</option><option value="C">Sección C</option><option value="D">Sección D</option><option value="E">Sección E</option>
+          </select>
+        </div>
+      </div>
+      <!-- FIX-SEC-2: campo de contraseña admin en el modal, reemplaza el prompt() inseguro -->
+      <div class="form-group" id="adminPassDiv" style="background:#f4f4f6;border:1.5px solid var(--borde);border-radius:10px;padding:12px;">
+        <label style="color:var(--rojo);font-weight:700;">🔐 Tu contraseña de administrador *</label>
+        <input type="password" id="uAdminPass" placeholder="Confirma tu contraseña para crear el usuario" autocomplete="current-password" style="width:100%;padding:10px 12px;border:1.5px solid var(--borde);border-radius:8px;font-size:14px;font-family:inherit;outline:none;margin-top:6px;">
+        <small style="color:var(--texto-suave);font-size:10px;">Necesaria para que Firebase te mantenga autenticado al crear el nuevo usuario.</small>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:4px;">
+        <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="guardarUsuario()">💾 Guardar</button>
+        <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="cerrarModalUsuario()">Cancelar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL JUSTIFICACIÓN ══ -->
+<div id="modalJustif" class="modal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title">📝 Justificar Inasistencia</span>
+      <button class="modal-close" onclick="document.getElementById('modalJustif').classList.remove('open')">✕</button>
+    </div>
+    <div id="justifEstudInfo" style="font-weight:700;font-size:14px;margin-bottom:14px;"></div>
+    <div style="font-size:13px;font-weight:700;color:var(--texto-suave);margin-bottom:8px;">¿Cuál es el motivo?</div>
+    <div class="motivo-grid">
+      <button class="motivo-btn" onclick="selMotivo('enfermedad')" id="mb_enfermedad"><span class="m-icon">🤒</span>Enfermedad</button>
+      <button class="motivo-btn" onclick="selMotivo('cita')" id="mb_cita"><span class="m-icon">🏥</span>Cita médica</button>
+      <button class="motivo-btn" onclick="selMotivo('familiar')" id="mb_familiar"><span class="m-icon">👨‍👩‍👧</span>Motivo familiar</button>
+      <button class="motivo-btn" onclick="selMotivo('otro')" id="mb_otro"><span class="m-icon">📝</span>Otro motivo</button>
+      <button class="motivo-btn" onclick="selMotivo('alerta')" id="mb_alerta" style="grid-column:1/-1;border-color:var(--rojo);color:var(--rojo);"><span class="m-icon">🚨</span>Salió de casa pero NO llegó al colegio — ALERTA</button>
+    </div>
+    <div id="detalleJustif" style="display:none;">
+      <div class="form-group" style="margin-bottom:12px;"><label>Descripción <span style="color:var(--rojo)">* OBLIGATORIO</span></label>
+        <textarea id="justifDetalle" rows="3" style="resize:none;padding:9px 12px;border:1.5px solid var(--borde);border-radius:8px;font-family:inherit;font-size:13px;outline:none;width:100%;" placeholder="Describe brevemente el motivo… (campo obligatorio)"></textarea>
+      </div>
+      <div id="evidenciaDiv">
+        <div style="font-size:12px;font-weight:700;color:var(--texto-suave);margin-bottom:6px;">EVIDENCIA (foto de receta, cita, etc.)</div>
+        <label for="evidenciaInput" class="upload-zone" style="padding:14px;">
+          <div style="font-size:1.8em;margin-bottom:4px;">📎</div>
+          <div style="font-size:12px;font-weight:700;">Toca para adjuntar imagen</div>
+        </label>
+        <input type="file" id="evidenciaInput" accept="image/*" style="display:none;" onchange="previsualizarEvidencia(this)">
+        <div id="evidenciaPreview" style="display:none;margin-top:8px;text-align:center;">
+          <img id="evidenciaImg" style="max-height:150px;border-radius:10px;border:2px solid var(--borde);" alt="">
+          <div style="font-size:11px;color:var(--primario);margin-top:4px;">✅ Imagen cargada</div>
+        </div>
+      </div>
+    </div>
+    <div id="alertaJustifMsg" style="display:none;" class="info-box alert">
+      <strong>🚨 Alerta de seguridad</strong>Esta situación será notificada al tutor. Confirma que tu hijo(a) salió de casa y no llegó al colegio.
+    </div>
+    <div style="display:flex;gap:10px;margin-top:14px;">
+      <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="enviarJustificacion()" id="btnEnviarJustif" disabled>📤 Enviar justificación</button>
+      <button class="btn btn-ghost" style="flex:1;justify-content:center;" onclick="document.getElementById('modalJustif').classList.remove('open')">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL EVIDENCIA ══ -->
+<div id="modalEvidencia" class="modal">
+  <div class="modal-box" style="text-align:center;padding:20px;">
+    <div class="modal-header">
+      <span class="modal-title">📎 Evidencia adjunta</span>
+      <button class="modal-close" onclick="document.getElementById('modalEvidencia').classList.remove('open')">✕</button>
+    </div>
+    <img id="evidenciaFullImg" style="max-width:100%;border-radius:12px;border:2px solid var(--borde);" alt="">
+  </div>
+</div>
+
+<div class="notif-stack" id="notifStack"></div>
+
+<!-- ══ MODAL EDITAR ESTUDIANTE ══ -->
+<div id="modalEditarEst" class="modal">
+  <div class="modal-box" style="max-width:420px;">
+    <div class="modal-header">
+      <span class="modal-title">✏️ Editar Estudiante</span>
+      <button class="modal-close" onclick="document.getElementById('modalEditarEst').classList.remove('open')">✕</button>
+    </div>
+    <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
+      <input type="hidden" id="editEstId">
+      <div>
+        <label style="font-size:11px;font-weight:600;color:var(--texto-suave);display:block;margin-bottom:4px;">NOMBRE COMPLETO</label>
+        <input class="input" id="editEstNombre" type="text" placeholder="Nombre completo">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--texto-suave);display:block;margin-bottom:4px;">GRADO</label>
+          <select class="input" id="editEstGrado">
+            <option value="1ro">1ro</option><option value="2do">2do</option><option value="3ro">3ro</option>
+            <option value="4to">4to</option><option value="5to">5to</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--texto-suave);display:block;margin-bottom:4px;">SECCIÓN</label>
+          <select class="input" id="editEstSeccion">
+            <option value="A">A</option><option value="B">B</option><option value="C">C</option>
+            <option value="D">D</option><option value="E">E</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label style="font-size:11px;font-weight:600;color:var(--texto-suave);display:block;margin-bottom:4px;">DNI DEL APODERADO</label>
+        <input class="input" id="editEstDNI" type="text" maxlength="8" placeholder="8 dígitos">
+      </div>
+      <div>
+        <label style="font-size:11px;font-weight:600;color:var(--texto-suave);display:block;margin-bottom:4px;">TELÉFONO</label>
+        <input class="input" id="editEstTelefono" type="text" placeholder="Opcional">
+      </div>
+      <div style="display:flex;gap:10px;margin-top:6px;">
+        <button class="btn" style="flex:1;justify-content:center;background:var(--gris-claro);" onclick="document.getElementById('modalEditarEst').classList.remove('open')">Cancelar</button>
+        <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="guardarEdicionEstudiante()">💾 Guardar cambios</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/*
+ * ══════════════════════════════════════════════════════════════════
+ * SISTEMA AsistenciaQR — IE N.° 0162 SAN JOSÉ OBRERO — SECUNDARIA
+ * ══════════════════════════════════════════════════════════════════
+ * PASO OBLIGATORIO EN FIREBASE CONSOLE antes de usar en producción:
+ *
+ * 1) FIRESTORE SECURITY RULES — pegar en Firebase Console → Firestore → Rules:
+ *
+ * rules_version = '2';
+ * service cloud.firestore {
+ *   match /databases/{database}/documents {
+ *     match /estudiantes/{doc} {
+ *       allow read: if request.auth != null;
+ *       allow write: if request.auth != null;
+ *     }
+ *     match /asistencia/{doc} {
+ *       allow read, write: if request.auth != null;
+ *     }
+ *     match /justificaciones/{doc} {
+ *       allow read, write: if request.auth != null;
+ *     }
+ *     match /_sistema/{doc} {
+ *       // Solo usuarios autenticados pueden leer/escribir el doc de ping (sincronización de fecha)
+ *       allow read, write: if request.auth != null;
+ *     }
+ *     match /usuarios/{uid} {
+ *       // Cada usuario solo puede leer su propio perfil
+ *       allow read: if request.auth != null && request.auth.uid == uid;
+ *       // ⚠️ CRÍTICO: solo admins pueden crear/editar perfiles de usuario.
+ *       // Sin esto, un tutor podría cambiar su propio campo 'rol' a 'admin'.
+ *       allow write: if request.auth != null
+ *         && get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.rol == 'admin';
+ *     }
+ *   }
+ * }
+ *
+ * 2) ÍNDICE FIRESTORE — crear en Firebase Console → Firestore → Indexes:
+ *    Colección: estudiantes | Campo: dniPadre (Ascending)
+ *
+ * 3) PRIMER ADMINISTRADOR — crear en Firebase Console → Authentication →
+ *    Add user. Luego en Firestore → colección 'usuarios' → nuevo documento
+ *    con ID = UID del usuario → campos:
+ *    { nombre: "...", email: "...", rol: "admin", grados: [], secciones: [] }
+ * ══════════════════════════════════════════════════════════════════
+ */
+let FB = null;
+let sesion = null;
+let rolSelLogin = 'admin';
+let ventanaActiva = false;
+let temporizador = null;
+let tiempoRestante = 0;
+let scannerStream = null;
+let scannerRaf = null;
+let scannerCanvas = null;
+let scannerCtx = null;
+let escaneando = false;
+let facingMode = 'environment';
+let justifEstudianteId = null;
+let motivoSel = null;
+let editandoUsuarioId = null;
+let evidenciaBase64 = null;
+let chartDia = null;
+let chartGrado = null;
+let _estudiantesCache = [];
+let _asistenciaHoyCache = [];
+let _justificacionesCache = [];
+
+let _ignorarAuthChange = false;
+
+function _iniciarApp(fb) {
+  FB = fb;
+  window._iniciarApp = null; // marcar como ya ejecutada para evitar doble llamada
+  const splash = document.getElementById('splashScreen');
+  if (splash) splash.style.display = 'none';
+  const loginScr = document.getElementById('loginScreen');
+  if (loginScr) loginScr.style.display = 'flex';
+  // BUG #9 FIX: crear el admin inicial automáticamente si no existe.
+  // Se llama ANTES de registrar onAuthStateChanged para evitar race condition:
+  // crearAdminInicial pone _ignorarAuthChange=true y hace signIn/signOut interno;
+  // si el listener ya estuviera activo, interceptaría esa sesión temporal.
+  crearAdminInicial().then(() => {
+    // Registrar el listener solo después de que crearAdminInicial haya terminado
+    FB.onAuthStateChanged(FB.auth, async (user) => {
+      if (_ignorarAuthChange) return;
+      if (user && sesion === null) {
+        try {
+          const snap = await FB.getDoc(FB.doc(FB.db,'usuarios', user.uid));
+          if (snap.exists()) {
+            sesion = { uid: user.uid, email: user.email, ...snap.data() };
+            entrarApp();
+          } else {
+            await FB.signOut(FB.auth);
+          }
+        } catch(e) { console.error('Auth error:', e); }
+      }
+    });
+  });
+  // Actualizar indicador de estado Firebase
+  const fbDot = document.querySelector('.fb-dot');
+  const fbStatus = document.getElementById('fbStatus');
+  if (fbDot && fbStatus) {
+    fbDot.style.background = '#8b1a1a';
+    fbStatus.innerHTML = '<div class="fb-dot" style="background:#8b1a1a"></div> Firebase Online';
+  }
+}
+
+// Timeout de seguridad: si Firebase no cargó en 10s, mostrar login con mensaje de error
+// (10s en lugar de 5s para dar tiempo a crearAdminInicial que hace operaciones de red)
+setTimeout(() => {
+  const splash = document.getElementById('splashScreen');
+  if (splash && splash.style.display !== 'none') {
+    splash.style.display = 'none';
+    const loginScr = document.getElementById('loginScreen');
+    if (loginScr) loginScr.style.display = 'flex';
+    const err = document.getElementById('loginErr');
+    if (err) {
+      err.textContent = '⚠️ No se pudo conectar a Firebase. Verifica tu conexión a internet y recarga la página.';
+      err.style.display = 'block';
+    }
+    console.warn('Firebase no inicializó en 10 segundos');
+  }
+}, 10000);
+
+// FIX-SEC-1: La función crearAdminInicial fue eliminada.
+// La contraseña hardcodeada 'Admin1234' representaba un riesgo crítico de seguridad.
+// Para crear el primer administrador: ingresa a Firebase Console → Authentication
+// → Add user → correo y contraseña seguros, luego en Firestore → colección 'usuarios'
+// → nuevo doc con el UID del usuario → campos: { nombre, email, rol:'admin', grados:[], secciones:[] }
+async function crearAdminInicial() {
+  // Función deshabilitada por seguridad (ver comentario arriba)
+  return;
+}
+
+function selRol(rol) {
+  rolSelLogin = rol;
+  ['admin','tutor','auxiliar','padre'].forEach(r => document.getElementById('rp_'+r)?.classList.toggle('sel', r===rol));
+  const esPadre = rol === 'padre';
+  document.getElementById('loginCredDiv').classList.toggle('hide', esPadre);
+  document.getElementById('loginPadreDiv').classList.toggle('hide', !esPadre);
+  document.getElementById('loginHint').style.display = esPadre ? 'none' : 'block';
+  document.getElementById('loginBtn').onclick = esPadre ? hacerLoginPadre : hacerLogin;
+}
+
+async function hacerLogin() {
+  const err = document.getElementById('loginErr');
+  err.style.display = 'none';
+  const email = document.getElementById('loginUser').value.trim();
+  const pass = document.getElementById('loginPass').value;
+  if (!email || !pass) { err.textContent='⚠️ Ingresa correo y contraseña'; err.style.display='block'; return; }
+  const btn = document.getElementById('loginBtn');
+  btn.disabled = true; btn.textContent = '⏳ Ingresando…';
+  try {
+    const cred = await FB.signInWithEmailAndPassword(FB.auth, email, pass);
+    const snap = await FB.getDoc(FB.doc(FB.db, 'usuarios', cred.user.uid));
+    if (snap.exists()) {
+      sesion = { uid: cred.user.uid, email: cred.user.email, ...snap.data() };
+      entrarApp();
+    } else {
+      await FB.signOut(FB.auth);
+      err.textContent = '❌ Tu usuario no tiene perfil en el sistema.';
+      err.style.display = 'block';
+      btn.disabled = false; btn.textContent = '🔐 Ingresar';
+    }
+  } catch(e) {
+    let msg = '❌ Correo o contraseña incorrectos';
+    if (e.code === 'auth/too-many-requests') msg = '⚠️ Demasiados intentos — espera unos minutos';
+    else if (e.code === 'auth/user-disabled') msg = '❌ Esta cuenta está desactivada';
+    err.textContent = msg; err.style.display = 'block';
+    btn.disabled = false; btn.textContent = '🔐 Ingresar';
+  }
+}
+
+async function hacerLoginPadre() {
+  const dni = document.getElementById('loginDNI').value.trim();
+  const err = document.getElementById('loginErr');
+  err.style.display = 'none';
+  if (!/^(\d{8}|[A-Za-z0-9]{9,12})$/.test(dni)) { err.textContent='⚠️ Ingresa un DNI (8 dígitos) o carnet de extranjería válido'; err.style.display='block'; return; }
+  const btn = document.getElementById('loginBtn');
+  btn.disabled = true; btn.textContent = '⏳ Verificando…';
+  try {
+    // Obtener custom token desde la Cloud Function
+    const resp = await fetch('https://loginpadre-ufpmxbq7da-uc.a.run.app', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dni })
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      err.textContent = '❌ ' + (data.error || 'DNI no encontrado');
+      err.style.display = 'block';
+      btn.disabled = false; btn.textContent = '🔐 Ingresar';
+      return;
+    }
+    // Autenticar con custom token (seguro — solo ve datos de sus hijos)
+    await FB.signInWithCustomToken(FB.auth, data.token);
+    const hijos = await fsQuery('estudiantes', FB.where('dniPadre','==',dni));
+    sesion = { uid:'padre_'+dni, nombre:'Apoderado', rol:'padre', grados:[], secciones:[], dni };
+    entrarApp();
+    irPanel('padre');
+    document.getElementById('padreLoginDiv').style.display = 'none';
+    document.getElementById('padreInfoDiv').classList.remove('hide');
+    document.getElementById('padreApodInfo').innerHTML = '<strong>👪 DNI ' + dni + '</strong> — ' + hijos.length + ' hijo(s) registrado(s)';
+    await renderHijosInfo(hijos);
+  } catch(e) {
+    try { await FB.signOut(FB.auth); } catch(_) {}
+    err.textContent = '❌ Error: ' + e.message;
+    err.style.display = 'block';
+    btn.disabled = false; btn.textContent = '🔐 Ingresar';
+  }
+}
+
+function entrarApp() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appLayout').style.display = 'flex';
+  document.getElementById('loginUser').value = '';
+  document.getElementById('loginPass').value = '';
+  document.getElementById('loginErr').style.display = 'none';
+  document.getElementById('loginBtn').disabled = false;
+  document.getElementById('loginBtn').textContent = '🔐 Ingresar';
+  const iconos = { admin:'👑', tutor:'📖', auxiliar:'🛡️', padre:'👪' };
+  document.getElementById('sessionBadge').textContent = (iconos[sesion.rol]||'') + ' ' + sesion.nombre;
+  const todos = ['nav_admin','nav_asistencia','nav_justificaciones','nav_reportes','nav_padre'];
+  todos.forEach(n => { const el=document.getElementById(n); if(el) el.style.display=''; });
+  if (sesion.rol === 'padre') {
+    ['nav_admin','nav_asistencia','nav_justificaciones','nav_reportes'].forEach(n => { const el=document.getElementById(n); if(el) el.style.display='none'; });
+    ['mn_admin','mn_asistencia','mn_justificaciones','mn_reportes'].forEach(n => { const el=document.getElementById(n); if(el) el.style.display='none'; });
+    document.getElementById('timerBanner').style.display = 'none';
+  } else if (sesion.rol === 'tutor') {
+    ['nav_admin','nav_padre'].forEach(n => { const el=document.getElementById(n); if(el) el.style.display='none'; });
+    ['mn_admin','mn_padre'].forEach(n => { const el=document.getElementById(n); if(el) el.style.display='none'; });
+    document.getElementById('timerBanner').style.display = '';
+  } else if (sesion.rol === 'auxiliar') {
+    ['nav_admin','nav_padre'].forEach(n => { const el=document.getElementById(n); if(el) el.style.display='none'; });
+    ['mn_admin','mn_padre'].forEach(n => { const el=document.getElementById(n); if(el) el.style.display='none'; });
+    document.getElementById('timerBanner').style.display = '';
+  } else if (sesion.rol === 'admin') {
+    document.getElementById('nav_padre').style.display = 'none';
+    document.getElementById('mn_padre').style.display = 'none';
+  }
+  const hints = { admin:'<strong>👑 Administrador</strong>Gestión completa del sistema.', tutor:'<strong>📖 Tutor</strong>Revisa tu aula y aprueba justificaciones.', auxiliar:'<strong>🛡️ Auxiliar</strong>Registra asistencia y gestiona justificaciones.', padre:'<strong>👪 Apoderado</strong>Consulta la asistencia de tu hijo.' };
+  document.getElementById('userHint').innerHTML = hints[sesion.rol] || '';
+  actualizarFecha();
+  // Sincronizar fecha del servidor antes de cargar paneles (no bloquea la UI)
+  sincronizarFechaServidor().then(() => {
+    if (sesion.rol !== 'padre') { actualizarStats(); renderAlertasBadge(); }
+    if (sesion.rol === 'admin') irPanel('admin');
+    else if (sesion.rol === 'padre') irPanel('padre');
+    else irPanel('asistencia'); // tutor y auxiliar van a asistencia
+  });
+}
+
+async function cerrarSesion() {
+  ventanaActiva = false;
+  if (temporizador) { clearInterval(temporizador); temporizador=null; }
+  detenerCamara();
+  sesion = null;
+  _estudiantesCache = []; _asistenciaHoyCache = []; _justificacionesCache = [];
+  document.getElementById('appLayout').style.display = 'none';
+  document.getElementById('timerBanner').style.display = '';
+  try { await FB.signOut(FB.auth); } catch(e) {}
+  document.getElementById('loginScreen').style.display = 'flex';
+}
+
+async function fsGetAll(col) {
+  const snap = await FB.getDocs(FB.collection(FB.db, col));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+async function fsAdd(col, data) {
+  const ref = await FB.addDoc(FB.collection(FB.db, col), { ...data, _ts: FB.serverTimestamp() });
+  return ref.id;
+}
+async function fsGet(col, id) {
+  const snap = await FB.getDoc(FB.doc(FB.db, col, id));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
+async function fsSet(col, id, data) {
+  await FB.setDoc(FB.doc(FB.db, col, id), { ...data, _ts: FB.serverTimestamp() });
+}
+async function fsUpdate(col, id, data) {
+  await FB.updateDoc(FB.doc(FB.db, col, id), data);
+}
+async function fsDelete(col, id) {
+  await FB.deleteDoc(FB.doc(FB.db, col, id));
+}
+async function fsQuery(col, ...conditions) {
+  const q = FB.query(FB.collection(FB.db, col), ...conditions);
+  const snap = await FB.getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+// Fecha del servidor — se sincroniza una vez al iniciar sesión.
+// Fallback al reloj local solo si Firestore no responde.
+let _fechaServidor = null;
+
+async function sincronizarFechaServidor() {
+  try {
+    // Usamos un doc temporal para leer el serverTimestamp de Firestore
+    const ref = FB.doc(FB.db, '_sistema', 'ping');
+    await FB.setDoc(ref, { ts: FB.serverTimestamp() }, { merge: true });
+    const snap = await FB.getDoc(ref);
+    const ts = snap.data()?.ts?.toDate();
+    // FIX-FECHA: guardamos en formato ISO (YYYY-MM-DD) para que sea igual
+    // en todos los celulares sin importar su idioma o configuración regional.
+    if (ts) _fechaServidor = ts.toISOString().split('T')[0];
+  } catch(e) {
+    console.warn('No se pudo sincronizar fecha del servidor, usando fecha local:', e);
+  }
+}
+
+function getFecha() {
+  // FIX-FECHA: siempre ISO (YYYY-MM-DD) — nunca depende del locale del celular
+  return _fechaServidor || new Date().toISOString().split('T')[0];
+}
+function actualizarFecha() {
+  document.getElementById('topbarDate').textContent =
+    new Date().toLocaleDateString('es-PE',{weekday:'short',year:'numeric',month:'short',day:'numeric'});
+}
+
+const paneles = ['admin','asistencia','justificaciones','reportes','padre'];
+function irPanel(panel) {
+  paneles.forEach(p => {
+    const el = document.getElementById('panel_'+p); if(el) el.classList.add('hide');
+    const nav = document.getElementById('nav_'+p); if(nav) nav.classList.remove('active');
+    const mn = document.getElementById('mn_'+p); if(mn) mn.classList.remove('active');
+  });
+  const el = document.getElementById('panel_'+panel); if(el) el.classList.remove('hide');
+  const nav = document.getElementById('nav_'+panel); if(nav) nav.classList.add('active');
+  const mn = document.getElementById('mn_'+panel); if(mn) mn.classList.add('active');
+  const tits = { admin:'Administración', asistencia:'Control de Asistencia', justificaciones:'Justificaciones', reportes:'Reportes y Estadísticas', padre:'Mi Hijo/a' };
+  document.getElementById('topbarTitle').textContent = tits[panel] || '';
+  if (panel==='admin') { renderEstudiantes(); renderListaUsuarios(); actualizarStats(); }
+  if (panel==='asistencia') { renderListaAsistencia(); cargarTablaAsistencia(); renderAlertas(); }
+  if (panel==='justificaciones') { renderJustificaciones(); }
+  if (panel==='reportes') { document.getElementById('tablaReporte').innerHTML='<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--texto-suave);">Selecciona los filtros y presiona 🔍 Buscar</td></tr>'; }
+}
+
+function iniciarSesion() {
+  if (ventanaActiva) { notif('⚠️ Ya hay una sesión activa','warning'); return; }
+  ventanaActiva = true; tiempoRestante = 3600;
+  actualizarTimer();
+  temporizador = setInterval(() => {
+    if (tiempoRestante <= 0) { finalizarSesion(); return; }
+    tiempoRestante--; actualizarTimer();
+    if (tiempoRestante <= 300) document.getElementById('timerStatus').classList.add('blink');
+  }, 1000);
+  notif('🟢 Sesión iniciada — 60 minutos activos','success');
+  renderListaAsistencia();
+}
+function finalizarSesion() {
+  if (temporizador) { clearInterval(temporizador); temporizador=null; }
+  ventanaActiva = false;
+  document.getElementById('timerStatus').classList.remove('blink');
+  document.getElementById('timerDisplay').textContent = '--:--';
+  document.getElementById('timerStatus').textContent = 'Sesión finalizada';
+  document.getElementById('progressFill').style.width = '0%';
+  document.getElementById('progressLabel').textContent = 'Sin sesión activa';
+  actualizarStats(); notif('✅ Sesión finalizada','info');
+}
+async function finalizarYMarcarAusentes() {
+  if (!confirm('⚠️ ¿Seguro que deseas finalizar la sesión y marcar como ausentes a todos los estudiantes sin registro? Esta acción no se puede deshacer.')) return;
+  finalizarSesion();
+  notif('⏳ Marcando ausentes…','info');
+  try {
+    let todos = await fsGetAll('estudiantes');
+    // BUG #2 FIX: tutor solo marca ausentes de sus grados y secciones asignadas
+    if (sesion?.rol !== 'admin') {
+      if (sesion?.grados?.length) todos = todos.filter(e=>sesion.grados.includes(e.grado));
+      if (sesion?.secciones?.length) todos = todos.filter(e=>sesion.secciones.includes(e.seccion));
+    }
+    const fecha = getFecha();
+    const asist = await fsQuery('asistencia', FB.where('fecha','==',fecha));
+    const conRegistro = new Set(asist.map(a=>a.estudianteId));
+    const sinRegistro = todos.filter(e=>!conRegistro.has(e.id));
+    if (!sinRegistro.length) { notif('✅ Todos los estudiantes ya tienen registro hoy','success'); return; }
+    const hora = new Date().toLocaleTimeString('es-PE');
+
+    // Escritura por lotes (máx 500 por batch) — evita timeout con 900 alumnos
+    const LIMITE = 500;
+    for (let i = 0; i < sinRegistro.length; i += LIMITE) {
+      const lote = sinRegistro.slice(i, i + LIMITE);
+      const batch = FB.writeBatch(FB.db);
+      lote.forEach(e => {
+        const ref = FB.doc(FB.collection(FB.db, 'asistencia'));
+        batch.set(ref, {
+          estudianteId: e.id, nombre: e.nombre, grado: e.grado,
+          seccion: e.seccion, fecha, hora, estado: 'ausente',
+          registradoPor: 'auto-cierre', _ts: FB.serverTimestamp()
+        });
+      });
+      await batch.commit();
+    }
+
+    notif('✅ '+sinRegistro.length+' estudiante(s) marcados como ausentes','success');
+    renderListaAsistencia(); cargarTablaAsistencia(); actualizarStats();
+  } catch(err){ console.error(err); notif('❌ Error al marcar ausentes','error'); }
+}
+function actualizarTimer() {
+  const m = Math.floor(tiempoRestante/60).toString().padStart(2,'0');
+  const s = (tiempoRestante%60).toString().padStart(2,'0');
+  document.getElementById('timerDisplay').textContent = m+':'+s;
+  const pct = (tiempoRestante/3600)*100;
+  document.getElementById('progressFill').style.width = pct+'%';
+  document.getElementById('progressLabel').textContent = Math.round(pct)+'% tiempo restante';
+  document.getElementById('timerStatus').textContent = tiempoRestante<=300 ? '⚠️ Menos de 5 minutos' : '🟢 Sesión activa';
+}
+
+async function agregarEstudiante() {
+  const nombre = document.getElementById('sNombre').value.trim();
+  const grado = document.getElementById('sGrado').value;
+  const seccion = document.getElementById('sSeccion').value;
+  const dniPadre = document.getElementById('sDNI').value.trim();
+  const telefono = document.getElementById('sTelefono').value.trim();
+  if (!nombre || !dniPadre) { notif('❌ Nombre y DNI son obligatorios','error'); return; }
+  if (!/^(\d{8}|[A-Za-z0-9]{9,12})$/.test(dniPadre)) { notif('❌ DNI o carnet de extranjería inválido','error'); return; }
+  try {
+    await fsAdd('estudiantes',{ nombre, grado, seccion, dniPadre, telefono });
+    notif('✅ Estudiante registrado en Firebase','success');
+    document.getElementById('sNombre').value='';
+    document.getElementById('sDNI').value='';
+    document.getElementById('sTelefono').value='';
+    renderEstudiantes(); actualizarStats();
+  } catch(e) { notif('❌ Error al guardar: '+e.message,'error'); }
+}
+
+// Observer global para generar QRs solo cuando son visibles
+let _qrObserver = null;
+function _setupQrObserver() {
+  if (_qrObserver) { _qrObserver.disconnect(); }
+  _qrObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      const el = entry.target;
+      const id = el.dataset.qrid;
+      const est = _estudiantesCache.find(e => e.id === id);
+      if (est) generarQR(id, est);
+      _qrObserver.unobserve(el);
+    });
+  }, { rootMargin: '200px' }); // pre-cargar 200px antes de que sean visibles
+}
+
+async function renderEstudiantes() {
+  const c = document.getElementById('listaEstudiantes');
+  if (!c) return;
+  c.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:20px;color:var(--texto-suave);">⏳ Cargando…</div>';
+  let lista = await fsGetAll('estudiantes');
+  _estudiantesCache = lista;
+  const gf = document.getElementById('fGradoAdmin')?.value;
+  const sf = document.getElementById('fSecAdmin')?.value;
+  if (gf) lista = lista.filter(e=>e.grado===gf);
+  if (sf) lista = lista.filter(e=>e.seccion===sf);
+  const fecha = getFecha();
+  const asist = await fsQuery('asistencia', FB.where('fecha','==',fecha));
+  const presSet = new Set(asist.map(a=>a.estudianteId));
+  if (!lista.length) { c.innerHTML='<div style="padding:24px;text-align:center;color:var(--texto-suave);grid-column:1/-1;">📭 Sin estudiantes registrados</div>'; return; }
+  c.innerHTML = lista.map(e => `
+    <div class="student-card ${presSet.has(e.id)?'presente':''}">
+      <div class="student-name">${e.nombre}</div>
+      <div class="student-grade">${e.grado} — Sección ${e.seccion}</div>
+      <div class="qr-container" id="qr_${e.id}" data-qrid="${e.id}"></div>
+      <small style="color:var(--texto-suave);font-size:10px;">DNI apod: ${e.dniPadre}</small>
+      <div style="margin-top:7px;display:flex;gap:4px;justify-content:center;flex-wrap:wrap;">
+        ${sesion?.rol==='admin' ? `<button class="btn btn-sm" style="background:#8b1a1a;color:white;" onclick="descargarQR('${e.id}')">📥 QR</button>` : ''}
+        <button class="btn btn-sm" style="background:#2471a3;color:white;" onclick="abrirEditarEstudiante('${e.id}')">✏️</button>
+        <button class="btn btn-danger btn-sm" onclick="eliminarEstudiante('${e.id}')">🗑</button>
+      </div>
+    </div>`).join('');
+  // Generar todos los QRs de inmediato (no lazy) para que imprimirQR funcione correctamente
+  lista.forEach(e => {
+    generarQR(e.id, e);
+  });
+}
+
+function generarQR(id, estudiante) {
+  const el = document.getElementById('qr_'+id);
+  if (!el || el.querySelector('canvas') || el.querySelector('img')) return;
+  // Solo el id en el QR: texto corto, siempre funciona sin importar longitud del nombre
+  // Al escanear se consulta Firebase para obtener nombre, grado, seccion
+  try {
+    new QRCode(el, {
+      text: id,
+      width: 76, height: 76, correctLevel: QRCode.CorrectLevel.L
+    });
+  } catch(e) { console.warn('QR error', id, e); }
+}
+
+async function eliminarEstudiante(id) {
+  if (!confirm('¿Eliminar este estudiante?')) return;
+  await fsDelete('estudiantes', id);
+  renderEstudiantes(); actualizarStats();
+  notif('🗑 Estudiante eliminado','info');
+}
+
+async function abrirEditarEstudiante(id) {
+  const e = _estudiantesCache.find(x=>x.id===id);
+  if (!e) { notif('❌ Estudiante no encontrado','error'); return; }
+  document.getElementById('editEstId').value = id;
+  document.getElementById('editEstNombre').value = e.nombre || '';
+  document.getElementById('editEstGrado').value = e.grado || '1ro';
+  document.getElementById('editEstSeccion').value = e.seccion || 'A';
+  document.getElementById('editEstDNI').value = e.dniPadre || '';
+  document.getElementById('editEstTelefono').value = e.telefono || '';
+  document.getElementById('modalEditarEst').classList.add('open');
+}
+
+async function guardarEdicionEstudiante() {
+  const id = document.getElementById('editEstId').value;
+  const nombre = document.getElementById('editEstNombre').value.trim();
+  const grado = document.getElementById('editEstGrado').value;
+  const seccion = document.getElementById('editEstSeccion').value;
+  const dniPadre = document.getElementById('editEstDNI').value.trim();
+  const telefono = document.getElementById('editEstTelefono').value.trim();
+  if (!nombre || !dniPadre) { notif('❌ Nombre y DNI son obligatorios','error'); return; }
+  if (!/^(\d{8}|[A-Za-z0-9]{9,12})$/.test(dniPadre)) { notif('❌ DNI o carnet de extranjería inválido','error'); return; }
+  try {
+    await fsUpdate('estudiantes', id, { nombre, grado, seccion, dniPadre, telefono });
+    document.getElementById('modalEditarEst').classList.remove('open');
+    notif('✅ Estudiante actualizado correctamente','success');
+    renderEstudiantes(); actualizarStats();
+  } catch(e) { notif('❌ Error al guardar: '+e.message,'error'); }
+}
+
+async function descargarQR(id) {
+  // FIX-ADMIN: solo el administrador puede descargar carnets QR
+  if (sesion?.rol !== 'admin') { notif('❌ Solo el administrador puede descargar QR','error'); return; }
+  const e = _estudiantesCache.find(x=>x.id===id) || await fsGet('estudiantes', id);
+  if (!e) return;
+  const qrEl = document.getElementById('qr_'+id);
+  let qrCanvas = qrEl?.querySelector('canvas');
+  if (!qrCanvas) {
+    // Generar QR en memoria si no está en el DOM todavía
+    const dataUrl = await _generarQRDataURL(id, 180); // solo id para garantizar generacion
+    if (!dataUrl) { notif('❌ Error al generar el QR','error'); return; }
+    // Crear canvas temporal a partir del dataURL
+    const img = new Image(); img.src = dataUrl;
+    await new Promise(r => { img.onload = r; });
+    qrCanvas = document.createElement('canvas');
+    qrCanvas.width = 180; qrCanvas.height = 180;
+    qrCanvas.getContext('2d').drawImage(img, 0, 0);
+  }
+  const W=320,H=400;
+  const card = document.createElement('canvas');
+  card.width=W; card.height=H;
+  const ctx = card.getContext('2d');
+  ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#4a1010'; ctx.fillRect(0,0,W,80);
+  ctx.fillStyle='#8b1a1a'; ctx.fillRect(0,80,W,6);
+  ctx.fillStyle='#ffffff'; ctx.font='bold 13px Arial'; ctx.textAlign='center';
+  ctx.fillText('IE N.° 0162 SAN JOSÉ OBRERO', W/2, 22);
+  ctx.font='9px Arial'; ctx.fillStyle='rgba(255,255,255,0.8)';
+  ctx.fillText('SAN JOSÉ OBRERO', W/2, 37);
+  ctx.font='11px Arial'; ctx.fillStyle='rgba(255,255,255,0.7)';
+  ctx.fillText('Tarjeta de Asistencia Estudiantil', W/2, 53);
+  ctx.font='10px Arial'; ctx.fillStyle='rgba(255,255,255,0.5)';
+  ctx.fillText('Sistema AsistenciaQR — Firebase', W/2, 68);
+  const qrSize=180, qrX=(W-qrSize)/2, qrY=100;
+  ctx.fillStyle='#f0f2f0'; ctx.beginPath(); ctx.roundRect(qrX-10,qrY-10,qrSize+20,qrSize+20,12); ctx.fill();
+  ctx.fillStyle='#ffffff'; ctx.beginPath(); ctx.roundRect(qrX-6,qrY-6,qrSize+12,qrSize+12,8); ctx.fill();
+  ctx.drawImage(qrCanvas,qrX,qrY,qrSize,qrSize);
+  ctx.strokeStyle='#d4ddd6'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(20,296); ctx.lineTo(W-20,296); ctx.stroke();
+  ctx.font='bold 10px monospace'; ctx.fillStyle='#9aaa9d'; ctx.textAlign='center';
+  ctx.fillText('ID: '+id.substring(0,8), W/2, 313);
+  ctx.font='bold 18px Arial'; ctx.fillStyle='#2c2020';
+  let nombre=e.nombre; if(ctx.measureText(nombre).width>W-40) nombre=nombre.split(' ').slice(0,3).join(' ');
+  ctx.fillText(nombre, W/2, 338);
+  ctx.font='bold 13px Arial'; ctx.fillStyle='#6b1212';
+  ctx.fillText(e.grado+' Secundaria  ·  Sección '+e.seccion, W/2, 360);
+  ctx.fillStyle='#4a1010'; ctx.fillRect(0,375,W,25);
+  ctx.font='9px Arial'; ctx.fillStyle='rgba(255,255,255,.5)';
+  ctx.fillText('No compartir — Solo uso interno del colegio', W/2, 389);
+  const a = document.createElement('a');
+  a.href = card.toDataURL('image/png');
+  a.download = 'QR_'+e.nombre.replace(/ /g,'_')+'_'+e.grado+e.seccion+'.png';
+  a.click();
+  notif('📥 Tarjeta QR descargada','success');
+}
+
+function _generarQRDataURL(texto, size) {
+  // Genera un QR en un div temporal oculto y retorna el dataURL
+  return new Promise(resolve => {
+    const tmp = document.createElement('div');
+    tmp.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
+    document.body.appendChild(tmp);
+    try {
+      new QRCode(tmp, { text: texto, width: size, height: size, correctLevel: QRCode.CorrectLevel.M });
+      // QRCode es síncrono para canvas
+      const canvas = tmp.querySelector('canvas');
+      const img = tmp.querySelector('img');
+      if (canvas) { resolve(canvas.toDataURL('image/png')); }
+      else if (img) { img.onload = () => resolve(img.src); img.onerror = () => resolve(''); if (img.complete) resolve(img.src); }
+      else resolve('');
+    } catch(e) { resolve(''); }
+    finally { document.body.removeChild(tmp); }
+  });
+}
+
+async function imprimirQR() {
+  let lista = _estudiantesCache.length ? _estudiantesCache : await fsGetAll('estudiantes');
+  const gf = document.getElementById('fGradoAdmin')?.value;
+  const sf = document.getElementById('fSecAdmin')?.value;
+  const filtrada = lista.filter(e=>(!gf||e.grado===gf)&&(!sf||e.seccion===sf));
+  if (!filtrada.length) { notif('❌ No hay estudiantes para imprimir','error'); return; }
+  notif('⏳ Generando QRs… espera un momento','info');
+  // Generar todos los QRs en memoria, en lotes para no bloquear el navegador
+  const LOTE = 20;
+  const qrMap = {};
+  for (let i = 0; i < filtrada.length; i += LOTE) {
+    const lote = filtrada.slice(i, i + LOTE);
+    await Promise.all(lote.map(async e => {
+      // Intentar reutilizar canvas del DOM si ya existe
+      const domCanvas = document.getElementById('qr_'+e.id)?.querySelector('canvas');
+      if (domCanvas) { qrMap[e.id] = domCanvas.toDataURL('image/png'); }
+      else { qrMap[e.id] = await _generarQRDataURL(e.id, 130); }
+    }));
+    // Pequeña pausa entre lotes para no congelar la UI
+    await new Promise(r => setTimeout(r, 10));
+  }
+  const rows = filtrada.map(e=>{
+    const qrSrc = qrMap[e.id] || '';
+    return `<div class="tarjeta"><div class="hdr"><div class="colegio">IE N.° 0162 SAN JOSÉ OBRERO<br>SAN JOSÉ OBRERO</div><div class="sub">Tarjeta de Asistencia</div></div><div class="qr-wrap"><img src="${qrSrc}" width="130" height="130"></div><div class="sep"></div><div class="id-txt">ID: ${e.id.substring(0,8)}</div><div class="nombre">${e.nombre}</div><div class="grado">${e.grado} Sec. · Sección ${e.seccion}</div><div class="ftr">IE N.° 0162 SAN JOSÉ OBRERO — Uso interno</div></div>`;
+  }).join('');
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><style>*{margin:0;padding:0;box-sizing:border-box;}body{font-family:Arial,sans-serif;background:white;padding:10px;}.grid{display:flex;flex-wrap:wrap;gap:8px;}.tarjeta{width:200px;border-radius:12px;overflow:hidden;border:1px solid #d4ddd6;background:white;page-break-inside:avoid;}.hdr{background:#4a1010;color:white;padding:10px;text-align:center;border-bottom:4px solid #8b1a1a;}.colegio{font-size:7.5px;font-weight:bold;line-height:1.4;}.sub{font-size:8px;opacity:.7;margin-top:2px;}.qr-wrap{padding:12px;text-align:center;background:#f8f9f8;}.sep{height:1px;background:#e0e6e1;margin:0 12px;}.id-txt{font-size:9px;color:#9aaa9d;text-align:center;padding:6px 0 2px;font-family:monospace;}.nombre{font-size:12px;font-weight:bold;text-align:center;padding:2px 8px;color:#2c2020;}.grado{font-size:10px;font-weight:bold;color:#6b1212;text-align:center;padding:2px 0 8px;}.ftr{background:#4a1010;color:rgba(255,255,255,.4);font-size:7px;text-align:center;padding:5px;}@media print{body{padding:0;}}</style></head><body><div class="grid">${rows}</div>
+</body></html>`;
+  const w=window.open('','_blank');
+  if (!w) { notif('❌ Bloqueo de ventana emergente — permite pop-ups','error'); return; }
+  w.document.write(html); w.document.close();
+  setTimeout(()=>{
+    const blob = new Blob([html], {type:'text/html'});
+    const a = w.document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const _gf2 = document.getElementById('fGradoAdmin')?.value || 'todos';
+    const _sf2 = document.getElementById('fSecAdmin')?.value || 'todas';
+    const _fecha2 = new Date().toISOString().slice(0,10);
+    a.download = 'tarjetas_qr_' + _gf2 + '_sec' + _sf2 + '_' + _fecha2 + '.html';
+    w.document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>w.close(),500);
+  },400);
+  notif('✅ '+filtrada.length+' tarjetas QR listas para imprimir','success');
+}
+
+async function registrarAsistencia(qrData) {
+  if (!ventanaActiva && sesion?.rol !== 'admin') { notif('⏰ Inicia la sesión primero (botón ▶)','error'); return false; }
+  try {
+    // QR puede ser solo el id (nuevo formato) o JSON (formato antiguo)
+    let estudianteId, nombre='', grado='', seccion='';
+    const trimmed = qrData.trim();
+    if (trimmed.startsWith('{')) {
+      const data = JSON.parse(trimmed);
+      estudianteId = data.id;
+      nombre = data.nombre || ''; grado = data.grado || ''; seccion = data.seccion || '';
+    } else {
+      estudianteId = trimmed; // nuevo formato: solo el id
+    }
+    if (!nombre) {
+      const est = await fsGet('estudiantes', estudianteId);
+      if (!est) { notif('❌ Estudiante no encontrado','error'); return false; }
+      nombre=est.nombre; grado=est.grado; seccion=est.seccion;
+    }
+    if (sesion?.grados?.length && !sesion.grados.includes(grado)) { notif('❌ No tienes permiso sobre ese grado','error'); return false; }
+    const fecha = getFecha();
+    const existente = await fsQuery('asistencia', FB.where('estudianteId','==',estudianteId), FB.where('fecha','==',fecha));
+    if (existente.length) { notif(`⚠️ ${nombre} ya fue registrado hoy`,'warning'); return false; }
+    const hora = new Date().toLocaleTimeString('es-PE');
+    // Determinar estado según hora de llegada
+    const ahora = new Date();
+    const hh = ahora.getHours();
+    const mm = ahora.getMinutes();
+    const totalMin = hh * 60 + mm;
+    const t750 = 7 * 60 + 50; // límite puntual: 7:50 a.m.
+    let estado;
+    if (totalMin <= t750) {
+      // Antes de o exactamente a las 07:50 → puntual
+      estado = 'puntual';
+    } else {
+      // Después de las 07:50 → tardanza (llegó tarde; ausente solo por cierre de sesión o registro manual)
+      estado = 'tardanza';
+    }
+    await fsAdd('asistencia',{ estudianteId, nombre, grado, seccion, fecha, hora, estado, registradoPor: sesion?.uid||'padre' });
+    const estadoEmoji = estado === 'puntual' ? '✅ PUNTUAL' : estado === 'tardanza' ? '⏰ TARDANZA' : '❌ AUSENTE';
+    notif(`${estadoEmoji} — ${nombre} — ${grado} "${seccion}" — ${hora}`,'success');
+    renderListaAsistencia(); cargarTablaAsistencia(); actualizarStats();
+    return true;
+  } catch(err) {
+    console.error(err); notif('❌ QR inválido o error de red','error'); return false;
+  }
+}
+
+async function renderListaAsistencia() {
+  const c = document.getElementById('listaAsistencia');
+  if (!c) return;
+  // FIX-ROL-7: si es tutor o auxiliar y no tiene grados/secciones asignados, mostrar aviso.
+  if ((sesion?.rol === 'tutor' || sesion?.rol === 'auxiliar') && !sesion?.grados?.length && !sesion?.secciones?.length) {
+    c.innerHTML='<div style="padding:24px;text-align:center;color:var(--texto-suave);grid-column:1/-1;">⚠️ No tienes grados ni secciones asignados.<br>Pide al Administrador que configure tu cuenta.</div>';
+    return;
+  }
+  let lista = await fsGetAll('estudiantes');
+  _estudiantesCache = lista;
+  const gf = document.getElementById('fGradoAux')?.value;
+  const sf = document.getElementById('fSecAux')?.value;
+  if (sesion?.grados?.length) lista = lista.filter(e=>sesion.grados.includes(e.grado));
+  if (sesion?.secciones?.length) lista = lista.filter(e=>sesion.secciones.includes(e.seccion));
+  if (gf) lista = lista.filter(e=>e.grado===gf);
+  if (sf) lista = lista.filter(e=>e.seccion===sf);
+  const fecha = getFecha();
+  const asist = await fsQuery('asistencia', FB.where('fecha','==',fecha));
+  _asistenciaHoyCache = asist;
+  const presSet = new Set(asist.filter(a=>a.estado!=='ausente').map(a=>a.estudianteId));
+  const ausenteSet = new Set(asist.filter(a=>a.estado==='ausente').map(a=>a.estudianteId));
+  const justifs = await fsQuery('justificaciones', FB.where('fecha','==',fecha), FB.where('estado','==','aprobado'));
+  const justifSet = new Set(justifs.map(j=>j.estudianteId));
+  if (!lista.length) { c.innerHTML='<div style="padding:24px;text-align:center;color:var(--texto-suave);grid-column:1/-1;">📭 Sin estudiantes</div>'; return; }
+  c.innerHTML = lista.map(e => {
+    const pres=presSet.has(e.id), ausen=ausenteSet.has(e.id), just=justifSet.has(e.id);
+    const cls=pres?'presente':just?'justificado':'ausente';
+    const badge=pres?'<span class="badge badge-green">✅ Presente</span>':ausen?'<span class="badge badge-red">❌ Ausente</span>':just?'<span class="badge badge-blue">📄 Justificado</span>':'<span class="badge badge-red">❌ Ausente</span>';
+    const qrStr = JSON.stringify({id:e.id,nombre:e.nombre,grado:e.grado,seccion:e.seccion}).replace(/'/g,"\\'");
+    const telLimpio = (e.telefono||'').replace(/\D/g,'');
+    const telWA = telLimpio ? (telLimpio.startsWith('51')?telLimpio:'51'+telLimpio) : '';
+    const msgWA = encodeURIComponent(`Estimado apoderado, le informamos que el/la estudiante *${e.nombre}* (${e.grado} – Sección ${e.seccion}) ha sido registrado/a como *AUSENTE* el día de hoy en la IE N.° 0162 SAN JOSÉ OBRERO. Por favor comunicarse con la institución si tiene alguna consulta.`);
+    const btnWA = ausen && telWA
+      ? `<a href="https://wa.me/${telWA}?text=${msgWA}" target="_blank" class="btn btn-sm" style="background:#25D366;color:white;text-decoration:none;margin-top:4px;width:100%;justify-content:center;display:flex;align-items:center;gap:5px;">📲 Avisar por WhatsApp</a>`
+      : ausen && !telWA
+      ? `<div style="font-size:10px;color:var(--texto-suave);margin-top:4px;text-align:center;">⚠️ Sin teléfono registrado</div>`
+      : '';
+    return `<div class="student-card ${cls}">
+      <div class="student-name">${e.nombre}</div>
+      <div class="student-grade">${e.grado} — Sección ${e.seccion}</div>
+      <div style="margin-top:8px;">${badge}</div>
+      <div style="display:flex;gap:5px;margin-top:8px;flex-wrap:wrap;justify-content:center;">
+        ${pres
+          ? `<button class="btn btn-ghost btn-sm" onclick="desmarcarAsistencia('${e.id}','${e.nombre.replace(/'/g,"\\'")}')">↩ Desmarcar</button>`
+          : ausen
+            ? `<button class="btn btn-success btn-sm" onclick="desmarcarAsistencia('${e.id}','${e.nombre.replace(/'/g,"\\'")}')">↩ Cambiar</button>`
+            : `<button class="btn btn-success btn-sm" onclick="registrarAsistencia('${qrStr}')">✅ Presente</button><button class="btn btn-danger btn-sm" onclick="registrarManualAusente('${e.id}','${e.nombre.replace(/'/g,"\\'")}','${e.grado}','${e.seccion}')">❌ Ausente</button>`
+        }
+      </div>
+      ${btnWA}
+    </div>`;
+  }).join('');
+}
+
+async function editarRegistroAsistencia(id, estadoActual) {
+  const estados = ['puntual','tardanza','ausente'];
+  const labels = {'puntual':'✅ Puntual','tardanza':'⏰ Tardanza','ausente':'❌ Ausente'};
+  const opciones = estados.map(e => `<option value="${e}" ${e===estadoActual?'selected':''}>${labels[e]}</option>`).join('');
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99999;display:flex;align-items:center;justify-content:center;';
+  overlay.innerHTML = `<div style="background:white;border-radius:14px;padding:24px;width:300px;box-shadow:0 12px 40px rgba(0,0,0,.25);">
+    <div style="font-weight:700;font-size:15px;margin-bottom:16px;">✏️ Editar Registro de Asistencia</div>
+    <div style="font-size:11px;font-weight:700;color:var(--texto-suave);text-transform:uppercase;margin-bottom:6px;">Nuevo Estado</div>
+    <select id="_editEstadoSel" style="width:100%;padding:9px 12px;border:1.5px solid var(--borde);border-radius:8px;font-family:inherit;font-size:14px;margin-bottom:16px;">${opciones}</select>
+    <div style="display:flex;gap:10px;">
+      <button id="_editGuardarBtn" style="flex:1;padding:10px;background:var(--primario);color:white;border:none;border-radius:8px;font-family:inherit;font-weight:700;cursor:pointer;">💾 Guardar</button>
+      <button id="_editCancelarBtn" style="flex:1;padding:10px;background:var(--gris-bg);border:1.5px solid var(--borde);border-radius:8px;font-family:inherit;font-weight:700;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('_editCancelarBtn').onclick = () => document.body.removeChild(overlay);
+  document.getElementById('_editGuardarBtn').onclick = async () => {
+    const nuevoEstado = document.getElementById('_editEstadoSel').value;
+    try {
+      await fsUpdate('asistencia', id, { estado: nuevoEstado });
+      notif('✅ Registro actualizado','success');
+      document.body.removeChild(overlay);
+      cargarTablaAsistencia(); renderListaAsistencia(); actualizarStats();
+    } catch(e) { notif('❌ Error: '+e.message,'error'); }
+  };
+}
+
+async function eliminarRegistroAsistencia(id, nombre) {
+  if (!confirm('¿Eliminar el registro de asistencia de ' + nombre + '?\n\nSe eliminará también de Firebase.')) return;
+  try {
+    await fsDelete('asistencia', id);
+    notif('🗑 Registro eliminado de Firebase','info');
+    cargarTablaAsistencia(); renderListaAsistencia(); actualizarStats();
+  } catch(e) { notif('❌ Error al eliminar: '+e.message,'error'); }
+}
+
+async function desmarcarAsistencia(estudianteId, nombre) {
+  if(!confirm('¿Desmarcar asistencia de '+nombre+'?')) return;
+  const fecha=getFecha();
+  const asist=await fsQuery('asistencia',FB.where('fecha','==',fecha),FB.where('estudianteId','==',estudianteId));
+  for(const a of asist) await fsDelete('asistencia',a.id);
+  notif('↩ Asistencia desmarcada: '+nombre,'info');
+  renderListaAsistencia(); cargarTablaAsistencia(); actualizarStats();
+}
+
+async function cargarTablaAsistencia() {
+  const fecha = getFecha();
+  let asist = await fsQuery('asistencia', FB.where('fecha','==',fecha));
+  // Filtrar por grados/secciones asignadas al tutor
+  if (sesion?.rol !== 'admin') {
+    if (sesion?.grados?.length) asist = asist.filter(a => sesion.grados.includes(a.grado));
+    if (sesion?.secciones?.length) asist = asist.filter(a => sesion.secciones.includes(a.seccion));
+  }
+  // Filtros manuales de Grado y Sección del "Registro del Día"
+  const fGrado = document.getElementById('fGradoTabla')?.value;
+  const fSec   = document.getElementById('fSecTabla')?.value;
+  if (fGrado) asist = asist.filter(a => a.grado === fGrado);
+  if (fSec)   asist = asist.filter(a => a.seccion === fSec);
+  const tbody = document.getElementById('tablaAsistencia');
+  if (!tbody) return;
+  if (!asist.length) { tbody.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--texto-suave);padding:18px;">Sin registros hoy</td></tr>'; return; }
+  asist.sort((a,b)=>a.hora<b.hora?1:-1);
+  tbody.innerHTML = asist.map(a=>{
+    const esAusente=a.estado==='ausente';
+    const esTardanza=a.estado==='tardanza';
+    const badgeEstado = esAusente ? '<span class="badge badge-red">❌ Ausente</span>' : esTardanza ? '<span class="badge" style="background:#f39c12;color:#fff;">⏰ Tardanza</span>' : '<span class="badge badge-green">✅ Puntual</span>';
+    return `<tr class="${esAusente?'row-ausente':esTardanza?'row-tardanza':'row-presente'}"><td>${a.nombre||a.estudianteId}</td><td>${a.grado||'—'}</td><td>${a.seccion||'—'}</td><td>${a.hora}</td><td>${badgeEstado}</td><td><div style="display:flex;gap:4px;"><button class="btn btn-sm" style="background:#2471a3;color:white;padding:4px 8px;" onclick="editarRegistroAsistencia('${a.id}','${a.estado}')">✏️</button><button class="btn btn-danger btn-sm" style="padding:4px 8px;" onclick="eliminarRegistroAsistencia('${a.id}','${(a.nombre||'').replace(/'/g,"\\'")}')">🗑</button></div></td></tr>`;
+  }).join('');
+}
+
+async function buscarPorNombre() {
+  const q = document.getElementById('buscarNombre').value.trim().toLowerCase();
+  const c = document.getElementById('resBusqueda');
+  if (q.length < 2) { c.innerHTML=''; return; }
+  let lista = _estudiantesCache.length ? _estudiantesCache : await fsGetAll('estudiantes');
+  lista = lista.filter(e=>e.nombre.toLowerCase().includes(q));
+  // Filtrar por grados/secciones del tutor
+  if (sesion?.rol !== 'admin') {
+    if (sesion?.grados?.length) lista = lista.filter(e => sesion.grados.includes(e.grado));
+    if (sesion?.secciones?.length) lista = lista.filter(e => sesion.secciones.includes(e.seccion));
+  }
+  const fecha=getFecha();
+  const asist=await fsQuery('asistencia',FB.where('fecha','==',fecha));
+  const presSet=new Set(asist.filter(a=>a.estado!=='ausente').map(a=>a.estudianteId));
+  c.innerHTML=lista.slice(0,8).map(e=>{
+    const pres=presSet.has(e.id);
+    const qrStr=JSON.stringify({id:e.id,nombre:e.nombre,grado:e.grado,seccion:e.seccion}).replace(/'/g,"\\'");
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:8px;margin-bottom:5px;background:${pres?'#f4f4f6':'var(--gris-bg)'};border:1px solid ${pres?'#a9dfbf':'var(--borde)'};">
+      <div><div style="font-size:12px;font-weight:700;">${e.nombre}</div><div style="font-size:10px;color:var(--texto-suave);">${e.grado} — Sección ${e.seccion}</div></div>
+      ${pres ? '<span class="badge badge-green">✅ Presente</span>' : `<div style="display:flex;gap:4px;"><button class="btn btn-success btn-sm" onclick="registrarAsistencia('${qrStr}')">✅</button><button class="btn btn-danger btn-sm" onclick="registrarManualAusente('${e.id}','${e.nombre.replace(/'/g,"\\'")}','${e.grado}','${e.seccion}')">❌</button></div>`}
+    </div>`;
+  }).join('')||'<div style="padding:8px;font-size:12px;color:var(--texto-suave);">Sin resultados</div>';
+}
+
+async function buscarPorDNI() {
+  const dni=document.getElementById('dniBusq').value.trim();
+  const c=document.getElementById('resDNI');
+  if(!/^(\d{8}|[A-Za-z0-9]{9,12})$/.test(dni)){notif('❌ DNI o carnet de extranjería inválido','error');return;}
+  // FIX-PERF-4c: consulta directa por DNI en lugar de descargar todos los estudiantes
+  const hijos=await fsQuery('estudiantes', FB.where('dniPadre','==',dni));
+  if(!hijos.length){c.innerHTML='<div style="font-size:12px;color:var(--rojo);background:#ececee;padding:8px;border-radius:8px;">❌ Sin estudiantes con ese DNI</div>';return;}
+  const fecha=getFecha();
+  const asist=await fsQuery('asistencia',FB.where('fecha','==',fecha));
+  const presSet=new Set(asist.filter(a=>a.estado!=='ausente').map(a=>a.estudianteId));
+  c.innerHTML=hijos.map(e=>{
+    const pres=presSet.has(e.id);
+    const qrStr=JSON.stringify({id:e.id,nombre:e.nombre,grado:e.grado,seccion:e.seccion}).replace(/'/g,"\\'");
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-radius:9px;margin-bottom:6px;background:${pres?'#f4f4f6':'var(--gris-bg)'};border:1.5px solid ${pres?'#a9dfbf':'var(--borde)'};">
+      <div><div style="font-size:13px;font-weight:700;">${e.nombre}</div><div style="font-size:11px;color:var(--texto-suave);">${e.grado} — Sección ${e.seccion}</div></div>
+      ${pres?'<span class="badge badge-green">✅ Presente</span>':`<button class="btn btn-success btn-sm" onclick="registrarAsistencia('${qrStr}')">Registrar</button>`}
+    </div>`;
+  }).join('');
+}
+
+async function consultarPadre() {
+  const dni=document.getElementById('padreInputDNI').value.trim();
+  if(!/^(\d{8}|[A-Za-z0-9]{9,12})$/.test(dni)){notif('❌ DNI o carnet de extranjería inválido','error');return;}
+  try {
+    // Obtener custom token desde la Cloud Function
+    const resp = await fetch('https://loginpadre-ufpmxbq7da-uc.a.run.app', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dni })
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      notif('❌ ' + (data.error || 'DNI no encontrado'), 'error');
+      return;
+    }
+    // Autenticar con custom token
+    await FB.signInWithCustomToken(FB.auth, data.token);
+    const hijos=await fsQuery('estudiantes', FB.where('dniPadre','==',dni));
+    document.getElementById('padreLoginDiv').style.display='none';
+    document.getElementById('padreInfoDiv').classList.remove('hide');
+    document.getElementById('padreApodInfo').innerHTML=`<strong>👪 Apoderado: DNI ${dni}</strong> — ${hijos.length} hijo(s)`;
+    await renderHijosInfo(hijos);
+  } catch(e) {
+    try { await FB.signOut(FB.auth); } catch(_) {}
+    notif('❌ Error de conexión: '+e.message,'error');
+  }
+}
+
+async function renderHijosInfo(hijos) {
+  const fecha=getFecha();
+  let presSet=new Set(), ausenteSet=new Set(), justifs=[];
+  for(const h of hijos) {
+    try {
+      const r=await fsQuery('asistencia',FB.where('estudianteId','==',h.id),FB.where('fecha','==',fecha));
+      if(r.length){ if(r[0].estado==='ausente') ausenteSet.add(h.id); else presSet.add(h.id); }
+    } catch(e2){}
+  }
+  for(const h of hijos) {
+    try { const r=await fsQuery('justificaciones',FB.where('estudianteId','==',h.id),FB.where('fecha','==',fecha)); justifs.push(...r); } catch(e2){}
+  }
+  const c=document.getElementById('padreHijosDiv');
+  c.innerHTML=hijos.map(h=>{
+    const pres=presSet.has(h.id), ausenteReg=ausenteSet.has(h.id);
+    const justifHoy=justifs.find(j=>j.estudianteId===h.id&&j.fecha===fecha);
+    let estadoHtml='',botones='';
+    if(pres){
+      estadoHtml='<span class="badge badge-green" style="font-size:12px;padding:5px 14px;">✅ ASISTIÓ hoy</span>';
+    }else if(justifHoy && justifHoy.estado==='pendiente'){
+      estadoHtml=`<div style="background:#fef9ec;border:2px solid #f39c12;border-radius:10px;padding:12px;text-align:center;"><div style="font-size:1.4em;margin-bottom:4px;">⏳</div><div style="font-weight:700;color:#784212;font-size:13px;">Justificación enviada</div><div style="font-size:11px;color:#784212;margin-top:3px;">En espera de aprobación del tutor</div></div>`;
+    }else if(justifHoy && justifHoy.estado==='aprobado'){
+      estadoHtml=`<div style="background:#f4f4f6;border:2px solid #8b1a1a;border-radius:10px;padding:12px;text-align:center;"><div style="font-size:1.4em;margin-bottom:4px;">✅</div><div style="font-weight:700;color:#6b1212;font-size:13px;">Justificación aprobada</div></div>`;
+      botones=`<button class="btn btn-primary" style="margin-top:10px;width:100%;justify-content:center;background:#8b1a1a;" onclick="descargarBoletaPadre('${justifHoy.id}')">📄 Ver boleta</button>`;
+    }else if(justifHoy && justifHoy.estado==='rechazado'){
+      estadoHtml=`<div style="background:#ececee;border:2px solid var(--rojo);border-radius:10px;padding:12px;text-align:center;"><div style="font-size:1.4em;margin-bottom:4px;">❌</div><div style="font-weight:700;color:#6b1212;font-size:13px;">Justificación rechazada</div><div style="font-size:11px;color:#6b1212;margin-top:3px;">Comunícate con el tutor</div></div>`;
+    }else if(ausenteReg){
+      estadoHtml=`<div style="background:#ececee;border:2px solid var(--rojo);border-radius:10px;padding:12px;text-align:center;"><div style="font-size:1.6em;margin-bottom:4px;">🚨</div><div style="font-weight:700;color:var(--rojo);font-size:14px;">AUSENTE HOY</div></div>`;
+      botones=`<button class="btn btn-orange" style="margin-top:10px;width:100%;justify-content:center;" onclick="abrirJustif('${h.id}')">📝 Justificar</button>`;
+    }else{
+      estadoHtml='<span class="badge" style="font-size:12px;padding:5px 14px;background:#f0f0f0;color:#888;">⏳ Sin registro aún</span>';
+    }
+    return `<div class="hijo-card ${pres?'presente':ausenteReg?'ausente':''}"><div class="hijo-nombre">${h.nombre}</div><div class="hijo-grado">${h.grado} — Sección ${h.seccion}</div><div style="margin-top:10px;">${estadoHtml}</div>${botones}</div>`;
+  }).join('');
+}
+
+async function descargarBoletaPadre(justifId) {
+  const j=await fsGet('justificaciones',justifId);
+  if(!j){notif('❌ No se encontró','error');return;}
+  const ahora=new Date(j.validadoEn||Date.now());
+  const vence=new Date(j.venceEn||ahora.getTime()+48*60*60*1000);
+  const fmtFecha=d=>d.toLocaleDateString('es-PE',{day:'2-digit',month:'2-digit',year:'numeric'});
+  const fmtHora=d=>d.toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'});
+  generarBoletaJustificacion(j,fmtFecha,fmtHora,ahora,vence);
+}
+
+function cerrarSesionPadre() {
+  document.getElementById('padreLoginDiv').style.display='';
+  document.getElementById('padreInfoDiv').classList.add('hide');
+  document.getElementById('padreInputDNI').value='';
+  // BUG #8 FIX: cerrar la sesión anónima de Firebase Auth al salir del panel del padre
+  try { if(FB?.auth?.currentUser) FB.signOut(FB.auth); } catch(_) {}
+}
+
+async function abrirJustif(estudianteId) {
+  justifEstudianteId = estudianteId; motivoSel=null; evidenciaBase64=null;
+  const e=await fsGet('estudiantes', estudianteId);
+  document.getElementById('justifEstudInfo').textContent=e?`Estudiante: ${e.nombre} — ${e.grado} "${e.seccion}"` : '';
+  ['enfermedad','cita','familiar','otro','alerta'].forEach(m=>document.getElementById('mb_'+m)?.classList.remove('sel'));
+  document.getElementById('detalleJustif').style.display='none';
+  document.getElementById('alertaJustifMsg').style.display='none';
+  document.getElementById('justifDetalle').value='';
+  document.getElementById('evidenciaPreview').style.display='none';
+  document.getElementById('evidenciaInput').value='';
+  document.getElementById('btnEnviarJustif').disabled=true;
+  document.getElementById('modalJustif').classList.add('open');
+}
+
+function selMotivo(m) {
+  motivoSel=m;
+  ['enfermedad','cita','familiar','otro','alerta'].forEach(x=>document.getElementById('mb_'+x)?.classList.remove('sel'));
+  document.getElementById('mb_'+m)?.classList.add('sel');
+  const esAlerta=m==='alerta';
+  document.getElementById('detalleJustif').style.display='block';
+  document.getElementById('evidenciaDiv').style.display=esAlerta?'none':'block';
+  document.getElementById('alertaJustifMsg').style.display=esAlerta?'block':'none';
+  document.getElementById('btnEnviarJustif').disabled=false;
+  const placeholders={enfermedad:'Ej: Fiebre alta desde ayer…',cita:'Ej: Cita en el Hospital…',familiar:'Ej: Viaje de emergencia…',otro:'Describe el motivo…',alerta:'Confirma que salió de casa y no llegó al colegio'};
+  document.getElementById('justifDetalle').placeholder=placeholders[m]||'';
+}
+
+function previsualizarEvidencia(input) {
+  const file=input.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    evidenciaBase64=e.target.result;
+    document.getElementById('evidenciaImg').src=evidenciaBase64;
+    document.getElementById('evidenciaPreview').style.display='block';
+  };
+  reader.readAsDataURL(file);
+}
+
+async function enviarJustificacion() {
+  if(!motivoSel||!justifEstudianteId) return;
+  const detalle=document.getElementById('justifDetalle').value.trim();
+  if(!detalle&&motivoSel!=='alerta'){notif('❌ La descripción es OBLIGATORIA','error');return;}
+  const fecha=getFecha(), hora=new Date().toLocaleTimeString('es-PE');
+  // BUG #6 FIX: verificar que no esté ya marcado presente antes de guardar la justificación
+  if(motivoSel!=='alerta'){
+    const asistHoy=await fsQuery('asistencia',FB.where('estudianteId','==',justifEstudianteId),FB.where('fecha','==',fecha));
+    if(asistHoy.length&&(asistHoy[0].estado==='puntual'||asistHoy[0].estado==='tardanza')){
+      notif('ℹ️ El estudiante ya está marcado como PRESENTE hoy. No se puede justificar.','warning');
+      document.getElementById('modalJustif').classList.remove('open');
+      return;
+    }
+    // Verificar si ya existe una justificación para ese día
+    const justifExist=await fsQuery('justificaciones',FB.where('estudianteId','==',justifEstudianteId),FB.where('fecha','==',fecha));
+    if(justifExist.length){notif('⚠️ Ya existe una justificación para este estudiante hoy.','warning');document.getElementById('modalJustif').classList.remove('open');return;}
+  }
+  const e=await fsGet('estudiantes',justifEstudianteId);
+  const justif={estudianteId:justifEstudianteId,nombre:e?.nombre||'',grado:e?.grado||'',seccion:e?.seccion||'',fecha,hora,motivo:motivoSel,detalle,evidencia:motivoSel!=='alerta'?(evidenciaBase64||null):null,estado:motivoSel==='alerta'?'alerta':'pendiente',telefono:e?.telefono||''};
+  await fsAdd('justificaciones',justif);
+  document.getElementById('modalJustif').classList.remove('open');
+  if(motivoSel==='alerta'){notif('🚨 ALERTA enviada al tutor','error');}
+  else{notif('⏳ Justificación enviada — en espera de aprobación del tutor','success');}
+  renderAlertasBadge();
+  const hijos=await fsQuery('estudiantes',FB.where('dniPadre','==',e?.dniPadre||''));
+  renderHijosInfo(hijos);
+}
+
+async function exportarJustificacionesExcel() {
+  const justifs = _justificacionesCache || [];
+  if (!justifs.length) { notif('⚠️ No hay justificaciones para exportar','info'); return; }
+  const rows = [['Nombre','Grado','Sección','Fecha','Motivo','Estado','Validado por']];
+  const motLabels = {enfermedad:'Enfermedad',cita:'Cita médica',familiar:'Motivo familiar',otro:'Otro motivo',alerta:'Alerta'};
+  justifs.forEach(j => rows.push([
+    j.nombre||'', j.grado||'', j.seccion||'', j.fecha||'',
+    motLabels[j.motivo]||j.motivo||'', j.estado||'', j.validadoPor||''
+  ]));
+  const csv = rows.map(r => r.map(c => '"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
+  const bom = '\uFEFF';
+  const blob = new Blob([bom+csv], {type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'justificaciones_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+  notif('📊 Excel descargado correctamente','success');
+}
+
+async function eliminarJustificacionesFiltradas() {
+  const justifs = _justificacionesCache || [];
+  if (!justifs.length) { notif('⚠️ No hay justificaciones para eliminar','info'); return; }
+  if (!confirm('⚠️ ¿Eliminar las ' + justifs.length + ' justificaciones mostradas actualmente? Esta acción no se puede deshacer.')) return;
+  notif('⏳ Eliminando...','info');
+  try {
+    await Promise.all(justifs.map(j => fsDelete('justificaciones', j.id)));
+    notif('🗑 ' + justifs.length + ' justificaciones eliminadas','success');
+    renderJustificaciones();
+  } catch(e) { notif('❌ Error al eliminar: '+e.message,'error'); }
+}
+
+async function renderJustificaciones() {
+  let justifs=await fsGetAll('justificaciones');
+  _justificacionesCache=justifs;
+  const fEstado=document.getElementById('fJustifEstado')?.value;
+  const fGrado=document.getElementById('fJustifGrado')?.value;
+  // FIX-ROL-9: filtrar también por secciones asignadas al tutor
+  if(sesion?.grados?.length) justifs=justifs.filter(j=>sesion.grados.includes(j.grado));
+  if(sesion?.secciones?.length) justifs=justifs.filter(j=>sesion.secciones.includes(j.seccion));
+  if(fEstado) justifs=justifs.filter(j=>j.estado===fEstado);
+  if(fGrado) justifs=justifs.filter(j=>j.grado===fGrado);
+  justifs.sort((a,b)=>(a.estado==='alerta'&&b.estado!=='alerta')?-1:(b.estado==='alerta'&&a.estado!=='alerta')?1:0);
+  const c=document.getElementById('listaJustificaciones');
+  if(!c) return;
+  if(!justifs.length){c.innerHTML='<div style="padding:24px;text-align:center;color:var(--texto-suave);">📭 Sin justificaciones</div>';return;}
+  const motLabels={enfermedad:'🤒 Enfermedad',cita:'🏥 Cita médica',familiar:'👨‍👩‍👧 Motivo familiar',otro:'📝 Otro motivo',alerta:'🚨 ALERTA: No llegó al colegio'};
+  const estadoBadge={pendiente:'<span class="badge badge-amber">⏳ Pendiente</span>',aprobado:'<span class="badge badge-green">✅ Aprobado</span>',rechazado:'<span class="badge badge-red">❌ Rechazado</span>',alerta:'<span class="badge badge-alerta">🚨 ALERTA</span>'};
+  c.innerHTML=justifs.map(j=>`
+    <div class="justif-card ${j.estado}">
+      <div class="justif-header"><div><div class="justif-nombre">${j.nombre}</div><div class="justif-sub">${j.grado} — Sección ${j.seccion} · ${j.fecha} ${j.hora}</div></div><div style="display:flex;align-items:center;gap:6px;">${estadoBadge[j.estado]||''}<button class="btn btn-sm" style="background:#2471a3;color:white;padding:4px 8px;" onclick="editarJustificacion('${j.id}','${j.estado}')">✏️</button><button class="btn btn-danger btn-sm" style="padding:4px 8px;" onclick="eliminarJustificacion('${j.id}','${(j.nombre||'').replace(/'/g,"\\'")}')">🗑</button></div></div>
+      <div class="justif-motivo"><strong>${motLabels[j.motivo]||j.motivo}</strong>${j.detalle?'<br><span style="color:var(--texto-suave);">'+j.detalle+'</span>':''}</div>
+      ${j.evidencia?`<div class="justif-evidencia" onclick="verEvidencia('${j.evidencia}')"><img src="${j.evidencia}" alt="Evidencia"><span>Ver evidencia →</span></div>`:''}
+      ${j.estado==='pendiente'||j.estado==='alerta'?`<div class="justif-actions"><button class="btn btn-success btn-sm" onclick="cambiarEstadoJustif('${j.id}','aprobado')">✅ Aprobar</button><button class="btn btn-danger btn-sm" onclick="cambiarEstadoJustif('${j.id}','rechazado')">❌ Rechazar</button></div>`:''}
+    </div>`).join('');
+  const alertas=justifs.filter(j=>j.estado==='alerta');
+  const banner=document.getElementById('alertasBanner');
+  if(banner) banner.innerHTML=alertas.map(j=>`<div class="alerta-banner"><div><div class="alerta-banner-txt">🚨 ALERTA URGENTE</div><div class="alerta-banner-sub">${j.nombre} — ${j.grado} "${j.seccion}" — ${j.fecha}</div></div></div>`).join('');
+}
+
+async function editarJustificacion(id, estadoActual) {
+  const estados = ['pendiente','aprobado','rechazado','alerta'];
+  const labels = {'pendiente':'⏳ Pendiente','aprobado':'✅ Aprobado','rechazado':'❌ Rechazado','alerta':'🚨 Alerta'};
+  const opciones = estados.map(e => `<option value="${e}" ${e===estadoActual?'selected':''}>${labels[e]}</option>`).join('');
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99999;display:flex;align-items:center;justify-content:center;';
+  overlay.innerHTML = `<div style="background:white;border-radius:14px;padding:24px;width:300px;box-shadow:0 12px 40px rgba(0,0,0,.25);">
+    <div style="font-weight:700;font-size:15px;margin-bottom:16px;">✏️ Editar Justificación</div>
+    <div style="font-size:11px;font-weight:700;color:var(--texto-suave);text-transform:uppercase;margin-bottom:6px;">Nuevo Estado</div>
+    <select id="_editJustifSel" style="width:100%;padding:9px 12px;border:1.5px solid var(--borde);border-radius:8px;font-family:inherit;font-size:14px;margin-bottom:16px;">${opciones}</select>
+    <div style="display:flex;gap:10px;">
+      <button id="_editJustifGuardar" style="flex:1;padding:10px;background:var(--primario);color:white;border:none;border-radius:8px;font-family:inherit;font-weight:700;cursor:pointer;">💾 Guardar</button>
+      <button id="_editJustifCancelar" style="flex:1;padding:10px;background:var(--gris-bg);border:1.5px solid var(--borde);border-radius:8px;font-family:inherit;font-weight:700;cursor:pointer;">Cancelar</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('_editJustifCancelar').onclick = () => document.body.removeChild(overlay);
+  document.getElementById('_editJustifGuardar').onclick = async () => {
+    const nuevoEstado = document.getElementById('_editJustifSel').value;
+    try {
+      await fsUpdate('justificaciones', id, { estado: nuevoEstado });
+      notif('✅ Justificación actualizada','success');
+      document.body.removeChild(overlay);
+      renderJustificaciones(); renderAlertasBadge(); actualizarStats();
+    } catch(e) { notif('❌ Error: '+e.message,'error'); }
+  };
+}
+
+async function eliminarJustificacion(id, nombre) {
+  if (!confirm('¿Eliminar la justificación de ' + nombre + '?\n\nSe eliminará definitivamente de Firebase.')) return;
+  try {
+    await fsDelete('justificaciones', id);
+    notif('🗑 Justificación eliminada de Firebase','info');
+    renderJustificaciones(); renderAlertasBadge(); actualizarStats();
+  } catch(e) { notif('❌ Error al eliminar: '+e.message,'error'); }
+}
+
+async function cambiarEstadoJustif(id, estado) {
+  const ahora=new Date(), vence=new Date(ahora.getTime()+48*60*60*1000);
+  const fmtFecha=d=>d.toLocaleDateString('es-PE',{day:'2-digit',month:'2-digit',year:'numeric'});
+  const fmtHora=d=>d.toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'});
+  await fsUpdate('justificaciones',id,{estado,validadoEn:ahora.toISOString(),venceEn:vence.toISOString(),validadoPor:sesion?.nombre||'Tutor'});
+  notif(estado==='aprobado'?'✅ Aprobada':'❌ Rechazada',estado==='aprobado'?'success':'warning');
+  if(estado==='aprobado'){
+    const j=await fsGet('justificaciones',id);
+    if(j) generarBoletaJustificacion(j,fmtFecha,fmtHora,ahora,vence);
+  }
+  renderJustificaciones(); renderAlertasBadge(); actualizarStats();
+}
+
+function generarBoletaJustificacion(j,fmtFecha,fmtHora,ahora,vence) {
+  const motLabels={enfermedad:'🤒 Enfermedad',cita:'🏥 Cita médica',familiar:'👨‍👩‍👧 Motivo familiar',otro:'📝 Otro motivo',alerta:'🚨 Alerta'};
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Boleta de Justificación</title><style>*{margin:0;padding:0;box-sizing:border-box;}body{font-family:'Segoe UI',Arial,sans-serif;background:linear-gradient(135deg,#f5f5f5 0%,#ede8e8 100%);display:flex;justify-content:center;align-items:flex-start;min-height:100vh;padding:24px;}.boleta{background:white;width:400px;border-radius:16px;overflow:hidden;box-shadow:0 8px 32px rgba(107,18,18,.18);}.header{background:linear-gradient(135deg,#6b1212 0%,#8b1a1a 100%);color:white;padding:20px 22px 16px;text-align:center;position:relative;}.logo-circle{width:64px;height:64px;border:2.5px solid rgba(255,255,255,.4);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 10px;overflow:hidden;background:white;}.logo-circle img{width:100%;height:100%;object-fit:cover;border-radius:50%;}.school-name{font-size:11px;font-weight:700;line-height:1.5;letter-spacing:.3px;opacity:.95;}.school-sub{font-size:9px;opacity:.65;margin-top:3px;letter-spacing:.5px;text-transform:uppercase;}.sello{background:linear-gradient(90deg,#6b1212,#27ae60);color:white;text-align:center;padding:11px;font-size:13px;font-weight:800;letter-spacing:.5px;display:flex;align-items:center;justify-content:center;gap:7px;}.body{padding:20px 22px;}.section-title{font-size:8px;font-weight:800;color:#6b1212;text-transform:uppercase;letter-spacing:1px;border-bottom:1.5px solid #ffd0d0;padding-bottom:5px;margin-bottom:12px;margin-top:16px;}.section-title:first-child{margin-top:0;}.field{margin-bottom:10px;display:flex;flex-direction:column;}.field label{font-size:8px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;}.field value{font-size:13px;font-weight:600;color:#1a1a1a;}.field.row{flex-direction:row;gap:16px;}.field.row>div{flex:1;}.vence{background:linear-gradient(135deg,#ececee,#ffd5d5);border:2px solid #8b1a1a;border-radius:10px;padding:14px;text-align:center;margin:16px 0;}.vence .v-lbl{font-size:8px;color:#6b1212;font-weight:800;text-transform:uppercase;letter-spacing:.8px;}.vence .v-val{font-size:16px;font-weight:900;color:#6b1212;margin-top:3px;}.horario{background:#fef9ec;border:1.5px solid #f39c12;border-radius:10px;padding:12px;text-align:center;margin-bottom:16px;}.horario .h-lbl{font-size:8px;font-weight:800;color:#784212;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;}.horario .h-dias{font-size:13px;font-weight:700;color:#784212;}.horario .h-hora{font-size:11px;color:#a04000;margin-top:2px;}.qr-area{border:1.5px dashed #ddd;border-radius:8px;padding:10px;text-align:center;margin-bottom:4px;color:#bbb;font-size:10px;}.footer{background:linear-gradient(135deg,#6b1212,#6b1212);color:rgba(255,255,255,.55);font-size:8px;text-align:center;padding:10px;letter-spacing:.3px;}</style></head><body><div class="boleta"><div class="header"><div class="logo-circle"><img src="logo.jpeg" alt="Logo IE 0162" onerror="this.parentElement.innerHTML='🏫'"></div><div class="school-name">IE N.° 0162 SAN JOSÉ OBRERO — UGEL 05 - SJL</div><div class="school-sub">Sistema de Control de Asistencia Estudiantil</div></div><div class="sello"><span>✅</span><span>JUSTIFICACIÓN APROBADA — VÁLIDA 48 HORAS</span></div><div class="body"><div class="section-title">📋 Datos del estudiante</div><div class="field"><label>Nombre completo</label><value>${j.nombre}</value></div><div class="field row"><div><div class="field"><label>Grado</label><value>${j.grado}</value></div></div><div><div class="field"><label>Sección</label><value>${j.seccion}</value></div></div></div><div class="section-title">📄 Detalle de la justificación</div><div class="field"><label>Fecha de inasistencia</label><value>${j.fecha}</value></div><div class="field"><label>Motivo</label><value>${motLabels[j.motivo]||j.motivo}</value></div><div class="field"><label>Aprobado por</label><value>${j.validadoPor||'Tutor del aula'}</value></div><div class="vence"><div class="v-lbl">⏰ Válido hasta</div><div class="v-val">${fmtFecha(vence)} — ${fmtHora(vence)}</div></div><div class="horario"><div class="h-lbl">📅 Horario de atención</div><div class="h-dias">Lunes a Viernes</div><div class="h-hora">9:00 a.m. — 3:30 p.m.</div></div></div><div class="footer">Sistema AsistenciaQR • Generado el ${fmtFecha(ahora)} a las ${fmtHora(ahora)}</div></div></body></html>`;
+  const blob=new Blob([html],{type:'text/html'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download='boleta_justificacion_'+j.nombre.replace(/\s+/g,'_')+'_'+j.fecha.replace(/\//g,'-')+'.html';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url),5000);
+  notif('📥 Boleta descargada','success');
+}
+
+function verEvidencia(src) {
+  document.getElementById('evidenciaFullImg').src=src;
+  document.getElementById('modalEvidencia').classList.add('open');
+}
+
+async function renderAlertas() {
+  const justifs=await fsGetAll('justificaciones');
+  const alertas=justifs.filter(j=>j.estado==='alerta');
+  const c=document.getElementById('alertasContainer');
+  if(!c) return;
+  c.innerHTML=alertas.map(j=>`<div class="alerta-banner"><div><div class="alerta-banner-txt">🚨 ALERTA — ${j.nombre}</div><div class="alerta-banner-sub">${j.grado} "${j.seccion}" — ${j.fecha} ${j.hora}</div></div></div>`).join('');
+}
+
+async function renderAlertasBadge() {
+  if (sesion?.rol === 'padre') return;
+  const justifs=_justificacionesCache?.length ? _justificacionesCache : await fsGetAll('justificaciones');
+  if (!_justificacionesCache?.length) _justificacionesCache = justifs;
+  const pendientes=justifs.filter(j=>j.estado==='pendiente'||j.estado==='alerta').length;
+  const badge=document.getElementById('navAlertaBadge');
+  if(badge){badge.style.display=pendientes>0?'':'none';badge.textContent=pendientes;}
+  const statEl=document.getElementById('statJustif');
+  if(statEl) statEl.textContent=pendientes;
+}
+
+async function actualizarStats() {
+  if (sesion?.rol === 'padre') return;
+  try {
+    // Usa caché en vez de llamar a Firebase — evita lecturas innecesarias
+    let todos = _estudiantesCache?.length ? _estudiantesCache : await fsGetAll('estudiantes');
+    if (!_estudiantesCache?.length) _estudiantesCache = todos;
+    if (sesion?.rol !== 'admin') {
+      if (sesion?.grados?.length) todos=todos.filter(e=>sesion.grados.includes(e.grado));
+      if (sesion?.secciones?.length) todos=todos.filter(e=>sesion.secciones.includes(e.seccion));
+    }
+    const asist = _asistenciaHoyCache?.length ? _asistenciaHoyCache : await fsQuery('asistencia',FB.where('fecha','==',getFecha()));
+    if (!_asistenciaHoyCache?.length) _asistenciaHoyCache = asist;
+    const presSet=new Set(asist.filter(a=>a.estado!=='ausente').map(a=>a.estudianteId));
+    const tardanzaCount=asist.filter(a=>a.estado==='tardanza').length;
+    const justifs = _justificacionesCache?.length ? _justificacionesCache : await fsGetAll('justificaciones');
+    if (!_justificacionesCache?.length) _justificacionesCache = justifs;
+    const pendientes=justifs.filter(j=>j.estado==='pendiente'||j.estado==='alerta').length;
+    const total=todos.length, presentes=[...presSet].filter(id=>todos.find(e=>e.id===id)).length;
+    const ausentes=total-presentes, pct=total?Math.round(presentes/total*100):0;
+    const s=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v;};
+    s('statTotal',total);s('statPresentes',presentes);s('statAusentes',ausentes);s('statPct',pct+'%');s('statJustif',pendientes);s('statTardanzas',tardanzaCount);
+  } catch(e) { console.error('Stats error',e); }
+}
+
+async function generarReporte() {
+  let estudiantes=await fsGetAll('estudiantes');
+  const grado=document.getElementById('rGrado')?.value;
+  const seccion=document.getElementById('rSeccion')?.value;
+  const fi=document.getElementById('rFechaInicio')?.value;
+  const ff=document.getElementById('rFechaFin')?.value;
+  // FIX-ROL-8: aplicar filtro de grados Y secciones asignadas al tutor en reportes
+  if(sesion?.grados?.length) estudiantes=estudiantes.filter(e=>sesion.grados.includes(e.grado));
+  if(sesion?.secciones?.length) estudiantes=estudiantes.filter(e=>sesion.secciones.includes(e.seccion));
+  if(grado) estudiantes=estudiantes.filter(e=>e.grado===grado);
+  if(seccion) estudiantes=estudiantes.filter(e=>e.seccion===seccion);
+  const asistencias=await fsGetAll('asistencia');
+  const justifs=await fsGetAll('justificaciones');
+  const filtrarFecha=(f)=>{
+    if(!f) return false;
+    if(!fi&&!ff) return true;
+    const partes=f.split('/'); if(partes.length!==3) return true;
+    const d=new Date(partes[2],partes[1]-1,partes[0]);
+    if(fi&&d<new Date(fi)) return false;
+    if(ff&&d>new Date(ff+'T23:59:59')) return false;
+    return true;
+  };
+  const estIds=new Set(estudiantes.map(e=>e.id));
+  const asistFilt=asistencias.filter(a=>filtrarFecha(a.fecha)&&estIds.has(a.estudianteId));
+  const tbody=document.getElementById('tablaReporte');
+  if(tbody){
+    tbody.innerHTML=asistFilt.sort((a,b)=>a.fecha<b.fecha?1:-1).map(a=>{
+      const e=estudiantes.find(x=>x.id===a.estudianteId); if(!e) return '';
+      const j=justifs.find(x=>x.estudianteId===a.estudianteId&&x.fecha===a.fecha);
+      const esAusente=a.estado==='ausente';
+      const esTardanza=a.estado==='tardanza';
+      const badgeRep = esAusente ? '<span class="badge badge-red">❌ Ausente</span>' : esTardanza ? '<span class="badge" style="background:#f39c12;color:#fff;">⏰ Tardanza</span>' : '<span class="badge badge-green">✅ Puntual</span>';
+      return `<tr class="${esAusente?'row-ausente':esTardanza?'row-tardanza':'row-presente'}"><td>${e.nombre}</td><td>${e.grado}</td><td>${e.seccion}</td><td>${a.fecha}</td><td>${badgeRep}</td><td>${j?j.motivo:'—'}</td></tr>`;
+    }).join('')||'<tr><td colspan="6" style="text-align:center;padding:18px;color:var(--texto-suave);">Sin datos</td></tr>';
+  }
+  const fechasUnicas=[...new Set(asistFilt.map(a=>a.fecha))].slice(-7);
+  const puntualesPorDia=fechasUnicas.map(f=>asistFilt.filter(a=>a.fecha===f&&a.estado==='puntual').length);
+  const tardanzasPorDia=fechasUnicas.map(f=>asistFilt.filter(a=>a.fecha===f&&a.estado==='tardanza').length);
+  const ausentesPorDia=fechasUnicas.map(f=>asistFilt.filter(a=>a.fecha===f&&a.estado==='ausente').length);
+  renderChartDia(fechasUnicas,puntualesPorDia,tardanzasPorDia,ausentesPorDia);
+  const gradosUnicos=[...new Set(estudiantes.map(e=>e.grado))];
+  const fecha=getFecha();
+  const puntualesPorGrado=gradosUnicos.map(g=>{const ids=new Set(estudiantes.filter(e=>e.grado===g).map(e=>e.id));return asistencias.filter(a=>ids.has(a.estudianteId)&&a.fecha===fecha&&a.estado==='puntual').length;});
+  const tardanzasPorGrado=gradosUnicos.map(g=>{const ids=new Set(estudiantes.filter(e=>e.grado===g).map(e=>e.id));return asistencias.filter(a=>ids.has(a.estudianteId)&&a.fecha===fecha&&a.estado==='tardanza').length;});
+  const ausentesPorGrado=gradosUnicos.map(g=>{const ids=new Set(estudiantes.filter(e=>e.grado===g).map(e=>e.id));return asistencias.filter(a=>ids.has(a.estudianteId)&&a.fecha===fecha&&a.estado==='ausente').length;});
+  renderChartGrado(gradosUnicos,puntualesPorGrado,tardanzasPorGrado,ausentesPorGrado);
+}
+
+function renderChartDia(labels,puntuales,tardanzas,ausentes) {
+  const ctx=document.getElementById('chartDia'); if(!ctx) return;
+  if(chartDia) chartDia.destroy();
+  chartDia=new Chart(ctx,{type:'bar',data:{labels,datasets:[
+    {label:'Puntuales',data:puntuales,backgroundColor:'#2980b9'},
+    {label:'Tardanzas',data:tardanzas,backgroundColor:'#27ae60'},
+    {label:'Faltas',data:ausentes,backgroundColor:'#c0392b'}
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,position:'bottom',labels:{font:{size:11},boxWidth:14}}},scales:{x:{stacked:false},y:{stacked:false,beginAtZero:true,ticks:{precision:0}}}}});
+}
+function renderChartGrado(labels,puntuales,tardanzas,ausentes) {
+  const ctx=document.getElementById('chartGrado'); if(!ctx) return;
+  if(chartGrado) chartGrado.destroy();
+  chartGrado=new Chart(ctx,{type:'bar',data:{labels,datasets:[
+    {label:'Puntuales',data:puntuales,backgroundColor:'#2980b9'},
+    {label:'Tardanzas',data:tardanzas,backgroundColor:'#27ae60'},
+    {label:'Faltas',data:ausentes,backgroundColor:'#c0392b'}
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,position:'bottom',labels:{font:{size:11},boxWidth:14}}},scales:{x:{stacked:false},y:{stacked:false,beginAtZero:true,ticks:{precision:0}}}}});
+}
+
+async function exportarExcel() {
+  const grado=document.getElementById('rGrado')?.value||'';
+  const seccion=document.getElementById('rSeccion')?.value||'';
+  const fi=document.getElementById('rFechaInicio')?.value;
+  const ff=document.getElementById('rFechaFin')?.value;
+  let estudiantes=await fsGetAll('estudiantes');
+  if(grado) estudiantes=estudiantes.filter(e=>e.grado===grado);
+  if(seccion) estudiantes=estudiantes.filter(e=>e.seccion===seccion);
+  const asistencias=await fsGetAll('asistencia');
+  const justifs=await fsGetAll('justificaciones');
+  const fecha=getFecha();
+  const filtrarFecha=(f)=>{
+    if(!fi&&!ff) return true;
+    const p=f.split('/'); if(p.length!==3) return true;
+    const d=new Date(p[2],p[1]-1,p[0]);
+    if(fi&&d<new Date(fi)) return false;
+    if(ff&&d>new Date(ff+'T23:59:59')) return false;
+    return true;
+  };
+  const grupos={};
+  for(const e of estudiantes){
+    const key=e.grado+'|'+e.seccion;
+    if(!grupos[key]) grupos[key]={grado:e.grado,seccion:e.seccion,estudiantes:[]};
+    grupos[key].estudiantes.push(e);
+  }
+  const gradoOrden=['1ro','2do','3ro','4to','5to'], secOrden=['A','B','C','D','E']; // Secundaria: 1ro a 5to
+  const claves=Object.keys(grupos).sort((a,b)=>{
+    const [ga,sa]=a.split('|'),[gb,sb]=b.split('|');
+    return (gradoOrden.indexOf(ga)-gradoOrden.indexOf(gb))||secOrden.indexOf(sa)-secOrden.indexOf(sb);
+  });
+  let html=`<html><head><meta charset="UTF-8"><style>body{font-family:Arial,sans-serif;font-size:11px;margin:16px;}h1{font-size:15px;color:#6b1212;}h3{font-size:13px;color:#6b1212;margin:22px 0 6px;border-bottom:2px solid #8b1a1a;padding-bottom:4px;}table{width:100%;border-collapse:collapse;margin-bottom:8px;}th{background:#6b1212;color:white;padding:6px 8px;font-size:10px;}td{padding:5px 8px;border-bottom:1px solid #eee;font-size:10px;}.pres{color:#2471a3;font-weight:700;background:#eaf4fb;}.tard{color:#1e8449;font-weight:700;background:#eafaf1;}.aus{color:#c0392b;font-weight:700;background:#fdedec;}@media print{body{margin:6px;}}</style></head><body><h1>📚 IE N.° 0162 SAN JOSÉ OBRERO — Reporte de Asistencia Secundaria</h1>`;
+  for(const key of claves){
+    const g=grupos[key];
+    const ids=new Set(g.estudiantes.map(e=>e.id));
+    const asistGrupo=asistencias.filter(a=>ids.has(a.estudianteId)&&filtrarFecha(a.fecha));
+    const fechasMostrar=[...new Set(asistGrupo.map(a=>a.fecha))].sort().slice(-5);
+    html+=`<h3>📋 ${g.grado} — Sección ${g.seccion}</h3><table><thead><tr><th>#</th><th>Apellidos y Nombres</th><th>DNI Apod.</th>`;
+    fechasMostrar.forEach(f=>{html+=`<th>${f}</th>`;});
+    html+=`<th>Hoy</th><th>Justificación</th></tr></thead><tbody>`;
+    g.estudiantes.sort((a,b)=>a.nombre.localeCompare(b.nombre)).forEach((e,i)=>{
+      const justHoy=justifs.find(j=>j.estudianteId===e.id&&j.fecha===fecha);
+      html+=`<tr><td>${i+1}</td><td>${e.nombre}</td><td>${e.dniPadre||'—'}</td>`;
+      fechasMostrar.forEach(f=>{const reg=asistencias.find(a=>a.estudianteId===e.id&&a.fecha===f);const esTard=reg?.estado==='tardanza';const esAus=!reg||reg.estado==='ausente';html+=`<td class="${esAus?'aus':esTard?'tard':'pres'}">${esAus?'❌ Falta':esTard?'⏰ Tardanza':'✅ Puntual'}</td>`;});
+      const regHoy=asistencias.find(a=>a.estudianteId===e.id&&a.fecha===fecha);const esTardHoy=regHoy?.estado==='tardanza';const esAusHoy=!regHoy||regHoy.estado==='ausente';
+      html+=`<td class="${esAusHoy?'aus':esTardHoy?'tard':'pres'}">${esAusHoy?'❌ Falta':esTardHoy?'⏰ Tardanza':'✅ Puntual'}</td><td>${justHoy?justHoy.motivo:'—'}</td></tr>`;
+    });
+    html+=`</tbody></table>`;
+  }
+  html+=`</body></html>`;
+  // BUG #5 FIX: proteger contra bloqueador de ventanas emergentes
+  const w=window.open('','_blank');
+  if(!w){notif('❌ Ventana emergente bloqueada. Permite pop-ups en tu navegador para exportar.','error');return;}
+  w.document.write(html); w.document.close();
+  setTimeout(()=>w.print(),700);
+  notif('📥 Reporte listo','success');
+}
+
+async function exportarPDF() {
+  const estudiantes=await fsGetAll('estudiantes');
+  const fecha=getFecha();
+  const asistencias=await fsQuery('asistencia',FB.where('fecha','==',fecha));
+  const tardSet=new Set(asistencias.filter(a=>a.estado==='tardanza').map(a=>a.estudianteId));
+  const presSet=new Set(asistencias.filter(a=>a.estado!=='ausente').map(a=>a.estudianteId));
+  const html=`<html><head><meta charset="UTF-8"><style>body{font-family:Arial,sans-serif;font-size:12px;margin:20px;}h1{font-size:16px;color:#6b1212;}table{width:100%;border-collapse:collapse;margin-top:10px;}th{background:#6b1212;color:white;padding:8px;font-size:11px;}td{padding:7px 8px;border-bottom:1px solid #ddd;}.pres{background:#eaf4fb;color:#2471a3;font-weight:600;}.tard{background:#eafaf1;color:#1e8449;font-weight:600;}.aus{background:#fdedec;color:#c0392b;font-weight:600;}.leyenda{display:flex;gap:18px;margin-bottom:10px;font-size:11px;}.leyenda span{display:inline-flex;align-items:center;gap:5px;}.dot{width:12px;height:12px;border-radius:3px;display:inline-block;}</style></head><body>
+  <h1>📚 IE N.° 0162 SAN JOSÉ OBRERO — Control de Asistencia — ${fecha}</h1>
+  <div class="leyenda"><span><span class="dot" style="background:#2471a3;"></span>✅ Puntual</span><span><span class="dot" style="background:#1e8449;"></span>⏰ Tardanza</span><span><span class="dot" style="background:#c0392b;"></span>❌ Falta</span></div>
+  <table><thead><tr><th>#</th><th>Estudiante</th><th>Grado</th><th>Sección</th><th>Estado</th><th>Firma</th></tr></thead><tbody>${estudiantes.map((e,i)=>{const esTard=tardSet.has(e.id);const esAus=!presSet.has(e.id);return`<tr class="${esAus?'aus':esTard?'tard':'pres'}"><td>${i+1}</td><td>${e.nombre}</td><td>${e.grado}</td><td>${e.seccion}</td><td>${esAus?'❌ Falta':esTard?'⏰ Tardanza':'✅ Puntual'}</td><td style="width:120px;border-bottom:1px solid #ccc;">&nbsp;</td></tr>`;}).join('')}</tbody></table></body></html>`;
+  // BUG #5 FIX: proteger contra bloqueador de ventanas emergentes
+  const w=window.open('','_blank');
+  if(!w){notif('❌ Ventana emergente bloqueada. Permite pop-ups en tu navegador para exportar el PDF.','error');return;}
+  w.document.write(html); w.document.close();
+  setTimeout(()=>w.print(),500);
+}
+
+async function renderListaUsuarios() {
+  const usuarios=await fsGetAll('usuarios');
+  const c=document.getElementById('listaUsuarios'); if(!c) return;
+  const rolTag={admin:'role-tag-admin',tutor:'role-tag-tutor',auxiliar:'role-tag-tutor'};
+  const rolLabel={admin:'👑 Admin',tutor:'📖 Tutor',auxiliar:'🛡️ Auxiliar'};
+  c.innerHTML=usuarios.map(u=>`
+    <div class="user-row">
+      <div><div class="user-row-name">${u.nombre}</div><div class="user-row-sub">${u.email} · <span class="role-tag ${rolTag[u.rol]||''}">${rolLabel[u.rol]||u.rol}</span></div></div>
+      <div style="display:flex;gap:6px;">${u.id!==sesion?.uid?`<button class="btn btn-danger btn-sm" onclick="eliminarUsuario('${u.id}','${u.email}')">🗑</button>`:'<span style="font-size:11px;color:var(--primario);">(tú)</span>'}</div>
+    </div>`).join('');
+}
+
+function toggleAsignacion() {
+  document.getElementById('asignacionDiv').style.display=document.getElementById('uRol').value==='admin'?'none':'';
+}
+function abrirModalUsuario() {
+  editandoUsuarioId=null;
+  document.getElementById('modalUsuarioTit').textContent='Nuevo Usuario';
+  ['uNombre','uEmail','uPass','uAdminPass'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  [...document.getElementById('uGrados').options].forEach(o=>o.selected=false);
+  [...document.getElementById('uSecciones').options].forEach(o=>o.selected=false);
+  document.getElementById('uRol').value='tutor';
+  toggleAsignacion();
+  document.getElementById('modalUsuario').classList.add('open');
+}
+function cerrarModalUsuario(){
+  const ap=document.getElementById('uAdminPass'); if(ap) ap.value='';
+  document.getElementById('modalUsuario').classList.remove('open');
+}
+
+async function guardarUsuario() {
+  const nombre=document.getElementById('uNombre').value.trim();
+  const email=document.getElementById('uEmail').value.trim();
+  const pass=document.getElementById('uPass').value;
+  const rol=document.getElementById('uRol').value;
+  const grados=[...document.getElementById('uGrados').selectedOptions].map(o=>o.value);
+  const secciones=[...document.getElementById('uSecciones').selectedOptions].map(o=>o.value);
+  // FIX-SEC-2: leer la contraseña del admin desde el campo del modal (no desde prompt)
+  const adminPass=document.getElementById('uAdminPass').value;
+  if(!nombre||!email){notif('❌ Nombre y correo son obligatorios','error');return;}
+  if(pass.length<6){notif('❌ Contraseña mínimo 6 caracteres','error');return;}
+  if(!adminPass){notif('❌ Debes ingresar tu contraseña de administrador','error');return;}
+  const btn=document.querySelector('#modalUsuario .btn-primary');
+  btn.disabled=true; btn.textContent='⏳ Creando…';
+  // Guardar credenciales del admin actual para reconectar después
+  const adminEmail=sesion?.email;
+  try {
+    _ignorarAuthChange=true;
+    const cred=await FB.createUserWithEmailAndPassword(FB.auth,email,pass);
+    const nuevoUid=cred.user.uid;
+    await FB.setDoc(FB.doc(FB.db,'usuarios',nuevoUid),{nombre,email,rol,grados,secciones,creadoEn:FB.serverTimestamp()});
+    await FB.signInWithEmailAndPassword(FB.auth,adminEmail,adminPass);
+    _ignorarAuthChange=false;
+    notif(`✅ Usuario "${nombre}" creado correctamente`,'success');
+    cerrarModalUsuario(); renderListaUsuarios();
+  } catch(e) {
+    _ignorarAuthChange=false;
+    let msg='❌ Error al crear usuario: '+e.message;
+    if(e.code==='auth/email-already-in-use') msg='❌ Ese correo ya está registrado';
+    else if(e.code==='auth/invalid-email') msg='❌ Correo inválido';
+    else if(e.code==='auth/weak-password') msg='❌ La contraseña es demasiado débil (mín. 6 caracteres)';
+    else if(e.code==='auth/wrong-password'||e.code==='auth/invalid-credential') msg='❌ Tu contraseña de administrador es incorrecta';
+    notif(msg,'error');
+    if(adminEmail&&adminPass){
+      try{await FB.signInWithEmailAndPassword(FB.auth,adminEmail,adminPass);}catch(_){}
+    }
+  }
+  btn.disabled=false; btn.textContent='💾 Guardar';
+}
+
+async function eliminarUsuario(uid, email) {
+  if(!confirm(`¿Eliminar usuario ${email}?\n\nNOTA: El perfil será eliminado del sistema, pero la cuenta de acceso seguirá existiendo en Firebase Auth. El usuario no podrá ingresar porque su perfil no existirá.`)) return;
+  await fsDelete('usuarios',uid);
+  renderListaUsuarios(); notif('🗑 Usuario eliminado del sistema','info');
+}
+
+// ══ SCANNER ══
+async function abrirScanner() {
+  // BUG #7 FIX: solo admin, tutor y auxiliar pueden escanear
+  const rolesPermitidos=['admin','tutor','auxiliar'];
+  if(!rolesPermitidos.includes(sesion?.rol)){notif('❌ No tienes permiso para registrar asistencia','error');return;}
+  if(!ventanaActiva && sesion?.rol !== 'admin'){notif('⏰ Inicia la sesión primero (botón ▶)','error');return;}
+  document.getElementById('scannerModal').classList.add('open');
+  switchScanTab('camera');
+}
+
+function switchScanTab(tab) {
+  ['Camera','Photo','Manual'].forEach(t=>{
+    document.getElementById('sp'+t).style.display='none';
+    document.getElementById('st'+t).classList.remove('active');
+  });
+  document.getElementById('sp'+tab.charAt(0).toUpperCase()+tab.slice(1)).style.display='block';
+  document.getElementById('st'+tab.charAt(0).toUpperCase()+tab.slice(1)).classList.add('active');
+  if(tab==='camera') iniciarCamara(); else detenerCamara();
+}
+
+async function iniciarCamara() {
+  document.getElementById('scanStatus').textContent='Iniciando cámara…';
+  document.getElementById('camErrorBox').style.display='none';
+  // jsQR ya está cargado al inicio — no necesitamos cargarlo dinámicamente
+  if(typeof jsQR === 'undefined') {
+    document.getElementById('scanStatus').textContent='⚠️ Error cargando escáner — recarga la página';
+    return;
+  }
+  detenerCamara();
+  try {
+    try{scannerStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{exact:facingMode}}});}
+    catch{scannerStream=await navigator.mediaDevices.getUserMedia({video:{facingMode}});}
+    const v=document.getElementById('scannerVideo');
+    v.srcObject=scannerStream;
+    await new Promise(r=>{v.onloadedmetadata=r;v.play().catch(()=>{});setTimeout(r,3000);});
+    await v.play().catch(()=>{});
+    scannerCanvas=document.createElement('canvas');
+    scannerCtx=scannerCanvas.getContext('2d',{willReadFrequently:true});
+    document.getElementById('scanStatus').textContent='🟢 Apunta al código QR del estudiante';
+    escaneando=true; tickScan();
+  } catch(err) {
+    let msg='❌ No se pudo acceder a la cámara';
+    if(err.name==='NotAllowedError') msg='🔒 Permiso denegado';
+    else if(err.name==='NotFoundError') msg='📷 No se encontró cámara';
+    document.getElementById('scanStatus').textContent=msg;
+    document.getElementById('camErrorBox').style.display='block';
+  }
+}
+
+function detenerCamara() {
+  escaneando=false;
+  if(scannerRaf){cancelAnimationFrame(scannerRaf);scannerRaf=null;}
+  if(scannerStream){scannerStream.getTracks().forEach(t=>t.stop());scannerStream=null;}
+  const v=document.getElementById('scannerVideo');
+  if(v) v.srcObject=null;
+}
+
+function flipCam(){facingMode=facingMode==='environment'?'user':'environment';iniciarCamara();}
+
+function tickScan() {
+  if(!escaneando) return;
+  const v=document.getElementById('scannerVideo');
+  if(!v||v.readyState<2||v.videoWidth===0){scannerRaf=requestAnimationFrame(tickScan);return;}
+  scannerCanvas.width=v.videoWidth; scannerCanvas.height=v.videoHeight;
+  scannerCtx.drawImage(v,0,0);
+  let img; try{img=scannerCtx.getImageData(0,0,scannerCanvas.width,scannerCanvas.height);}catch{scannerRaf=requestAnimationFrame(tickScan);return;}
+  const code=jsQR(img.data,img.width,img.height,{inversionAttempts:'attemptBoth'});
+  if(code&&code.data){
+    escaneando=false;
+    const flash=document.createElement('div');
+    Object.assign(flash.style,{position:'absolute',inset:'0',background:'rgba(192,57,43,.5)',borderRadius:'12px',pointerEvents:'none',animation:'fadeOut .7s ease forwards'});
+    document.getElementById('scannerView').appendChild(flash);
+    registrarAsistencia(code.data).then(ok=>{
+      if(ok) setTimeout(()=>cerrarScanner(),800);
+      else setTimeout(()=>{escaneando=true;tickScan();},3600);
+    });
+    return;
+  }
+  scannerRaf=requestAnimationFrame(tickScan);
+}
+
+async function procesarFotoQR(input) {
+  const file=input.files[0]; if(!file) return;
+  document.getElementById('photoStatus').textContent='⏳ Procesando imagen…';
+  document.getElementById('photoPreview').style.display='block';
+  if(typeof jsQR === 'undefined'){document.getElementById('photoStatus').textContent='❌ Error: recarga la página';return;}
+  const url=URL.createObjectURL(file);
+  const img=document.getElementById('photoImg');
+  img.src=url;
+  await new Promise(r=>{img.onload=r;});
+  const c=document.createElement('canvas');
+  c.width=img.naturalWidth; c.height=img.naturalHeight;
+  const ctx=c.getContext('2d',{willReadFrequently:true});
+  ctx.drawImage(img,0,0);
+  URL.revokeObjectURL(url);
+  let imgData; try{imgData=ctx.getImageData(0,0,c.width,c.height);}catch{document.getElementById('photoStatus').textContent='❌ No se pudo leer imagen';return;}
+  const code=jsQR(imgData.data,imgData.width,imgData.height,{inversionAttempts:'attemptBoth'});
+  const res=document.getElementById('photoResult');
+  if(!code){res.innerHTML='<span style="color:var(--rojo)">❌ No se encontró QR en la imagen</span>';document.getElementById('photoStatus').textContent='';return;}
+  res.innerHTML='<span style="color:var(--primario)">✅ QR detectado</span>';
+  document.getElementById('photoStatus').textContent='';
+  const ok=await registrarAsistencia(code.data);
+  if(ok){res.innerHTML='<span style="color:#8b1a1a">✅ Asistencia registrada</span>';setTimeout(()=>cerrarScanner(),1200);}
+  else{res.innerHTML='<span style="color:var(--naranja)">⚠️ Ya registrado o no encontrado</span>';}
+}
+
+async function procesarManual() {
+  const q=document.getElementById('manualInput').value.trim().toLowerCase();
+  if(!q){notif('❌ Ingresa el nombre','error');return;}
+  const todos=_estudiantesCache.length?_estudiantesCache:await fsGetAll('estudiantes');
+  const found=todos.filter(e=>e.nombre.toLowerCase().includes(q));
+  const c=document.getElementById('manualResultados');
+  if(!found.length){c.innerHTML='<div style="color:var(--rojo);font-size:12px;margin-top:8px;">❌ No se encontró</div>';return;}
+  const fecha=getFecha();
+  const asist=await fsQuery('asistencia',FB.where('fecha','==',fecha));
+  const presSet=new Set(asist.filter(a=>a.estado!=='ausente').map(a=>a.estudianteId));
+  c.innerHTML=found.slice(0,8).map(e=>{
+    const pres=presSet.has(e.id);
+    const qrStr=JSON.stringify({id:e.id,nombre:e.nombre,grado:e.grado,seccion:e.seccion}).replace(/'/g,"\\'");
+    return `<div style="background:var(--gris-bg);border:1.5px solid var(--borde);border-radius:10px;padding:10px 12px;margin-top:8px;">
+      <div style="font-weight:700;font-size:13px;">${e.nombre}</div>
+      <div style="font-size:11px;color:var(--texto-suave);margin-bottom:8px;">${e.grado} — Sección ${e.seccion}</div>
+      <div style="display:flex;gap:6px;">
+        ${pres ? '<span class="badge badge-green">✅ Ya registrado</span>' : `<button class="btn btn-success btn-sm" onclick="registrarManualPresente('${qrStr}')">✅ Presente</button><button class="btn btn-danger btn-sm" onclick="registrarManualAusente('${e.id}','${e.nombre.replace(/'/g,"\\'")}','${e.grado}','${e.seccion}')">❌ Ausente</button>`}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function registrarManualPresente(qrStr) {
+  const ok=await registrarAsistencia(qrStr);
+  if(ok){document.getElementById('manualInput').value='';document.getElementById('manualResultados').innerHTML='';cerrarScanner();}
+}
+
+async function registrarManualAusente(id,nombre,grado,seccion) {
+  // BUG #5 FIX: validar sesión activa y grado/sección asignada
+  if (!ventanaActiva && sesion?.rol !== 'admin') { notif('⏰ Inicia la sesión primero (botón ▶)','error'); return; }
+  if (sesion?.grados?.length && !sesion.grados.includes(grado)) { notif('❌ No tienes permiso sobre ese grado','error'); return; }
+  if (sesion?.secciones?.length && !sesion.secciones.includes(seccion)) { notif('❌ No tienes permiso sobre esa sección','error'); return; }
+  const fecha=getFecha(), hora=new Date().toLocaleTimeString('es-PE');
+  const existe=await fsQuery('asistencia',FB.where('fecha','==',fecha),FB.where('estudianteId','==',id));
+  if(existe.length){notif('⚠️ Ya tiene registro hoy','warning');return;}
+  await fsAdd('asistencia',{estudianteId:id,nombre,grado,seccion,fecha,hora,estado:'ausente',registradoPor:'manual'});
+  notif('❌ Ausencia registrada: '+nombre,'info');
+  document.getElementById('manualInput').value='';
+  document.getElementById('manualResultados').innerHTML='';
+  cerrarScanner();
+}
+
+function cerrarScanner() {
+  detenerCamara();
+  document.getElementById('scannerModal').classList.remove('open');
+  document.getElementById('manualInput').value='';
+  document.getElementById('photoInput').value='';
+  document.getElementById('photoPreview').style.display='none';
+  document.getElementById('photoStatus').textContent='';
+  document.getElementById('photoResult').innerHTML='';
+}
+
+function notif(msg,tipo='info') {
+  const s=document.getElementById('notifStack');
+  const el=document.createElement('div');
+  el.className='notif notif-'+tipo;
+  el.textContent=msg;
+  s.appendChild(el);
+  setTimeout(()=>el.remove(),4500);
+}
+
+function init() {
+  actualizarFecha();
+  setInterval(actualizarFecha,60000);
+  const hoy=new Date().toISOString().split('T')[0];
+  const hace7=new Date(Date.now()-7*864e5).toISOString().split('T')[0];
+  const fi=document.getElementById('rFechaInicio'); if(fi) fi.value=hace7;
+  const ff=document.getElementById('rFechaFin'); if(ff) ff.value=hoy;
+}
+window.onload=init;
+
+// FIX-LETRERO: registrar la función en window para que el módulo Firebase la encuentre
+// aunque cargue antes que este script (raro pero posible con internet lento)
+window._iniciarApp = _iniciarApp;
+</script>
+</body>
+</html>
