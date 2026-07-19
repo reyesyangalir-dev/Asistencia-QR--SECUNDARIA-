@@ -32,7 +32,7 @@ messaging.onBackgroundMessage((payload) => {
   const opciones = {
     body: payload.data?.cuerpo || '',
     icon: './logo.jpeg',
-    badge: './logo.jpeg',
+    badge: './badge-96.png',
     data: payload.data || {}
   };
   self.registration.showNotification(titulo, opciones);
