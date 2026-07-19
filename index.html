@@ -2178,7 +2178,7 @@ async function renderListaAsistencia() {
       : ausen?'<span class="badge badge-red">❌ Ausente</span>'
       : just?'<span class="badge badge-blue">📄 Justificado</span>'
       : '<span class="badge badge-red">❌ Ausente</span>';
-    const qrStr = JSON.stringify({id:e.id,nombre:e.nombre,grado:e.grado,seccion:e.seccion}).replace(/'/g,"\\'");
+    const qrStr = JSON.stringify({id:e.id,nombre:e.nombre,grado:e.grado,seccion:e.seccion}).replace(/'/g,"\\'").replace(/"/g,'&quot;');
     const telLimpio = (e.telefono||'').replace(/\D/g,'');
     const telWA = telLimpio ? (telLimpio.startsWith('51')?telLimpio:'51'+telLimpio) : '';
     const fecha = getFecha().split('-').reverse().join('/');
@@ -2331,7 +2331,7 @@ async function buscarPorNombre() {
   const presSet=new Set(asist.filter(a=>a.estado!=='ausente').map(a=>a.estudianteId));
   c.innerHTML=lista.slice(0,8).map(e=>{
     const pres=presSet.has(e.id);
-    const qrStr=JSON.stringify({id:e.id,nombre:e.nombre,grado:e.grado,seccion:e.seccion}).replace(/'/g,"\\'");
+    const qrStr=JSON.stringify({id:e.id,nombre:e.nombre,grado:e.grado,seccion:e.seccion}).replace(/'/g,"\\'").replace(/"/g,'&quot;');
     return `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:8px;margin-bottom:5px;background:${pres?'#f4f4f6':'var(--gris-bg)'};border:1px solid ${pres?'#a9dfbf':'var(--borde)'};">
       <div><div style="font-size:12px;font-weight:700;">${e.nombre}</div><div style="font-size:10px;color:var(--texto-suave);">${e.grado} — Sección ${e.seccion}</div></div>
       ${pres ? '<span class="badge badge-green">✅ Presente</span>' : `<div style="display:flex;gap:4px;"><button class="btn btn-success btn-sm" onclick="registrarAsistencia('${qrStr}')">✅</button><button class="btn btn-danger btn-sm" onclick="registrarManualAusente('${e.id}','${e.nombre.replace(/'/g,"\\'")}','${e.grado}','${e.seccion}')">❌</button></div>`}
@@ -2351,7 +2351,7 @@ async function buscarPorDNI() {
   const presSet=new Set(asist.filter(a=>a.estado!=='ausente').map(a=>a.estudianteId));
   c.innerHTML=hijos.map(e=>{
     const pres=presSet.has(e.id);
-    const qrStr=JSON.stringify({id:e.id,nombre:e.nombre,grado:e.grado,seccion:e.seccion}).replace(/'/g,"\\'");
+    const qrStr=JSON.stringify({id:e.id,nombre:e.nombre,grado:e.grado,seccion:e.seccion}).replace(/'/g,"\\'").replace(/"/g,'&quot;');
     return `<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-radius:9px;margin-bottom:6px;background:${pres?'#f4f4f6':'var(--gris-bg)'};border:1.5px solid ${pres?'#a9dfbf':'var(--borde)'};">
       <div><div style="font-size:13px;font-weight:700;">${e.nombre}</div><div style="font-size:11px;color:var(--texto-suave);">${e.grado} — Sección ${e.seccion}</div></div>
       ${pres?'<span class="badge badge-green">✅ Presente</span>':`<button class="btn btn-success btn-sm" onclick="registrarAsistencia('${qrStr}')">Registrar</button>`}
@@ -3308,7 +3308,7 @@ async function procesarManual() {
   const presSet=new Set(asist.filter(a=>a.estado!=='ausente').map(a=>a.estudianteId));
   c.innerHTML=found.slice(0,8).map(e=>{
     const pres=presSet.has(e.id);
-    const qrStr=JSON.stringify({id:e.id,nombre:e.nombre,grado:e.grado,seccion:e.seccion}).replace(/'/g,"\\'");
+    const qrStr=JSON.stringify({id:e.id,nombre:e.nombre,grado:e.grado,seccion:e.seccion}).replace(/'/g,"\\'").replace(/"/g,'&quot;');
     return `<div style="background:var(--gris-bg);border:1.5px solid var(--borde);border-radius:10px;padding:10px 12px;margin-top:8px;">
       <div style="font-weight:700;font-size:13px;">${e.nombre}</div>
       <div style="font-size:11px;color:var(--texto-suave);margin-bottom:8px;">${e.grado} — Sección ${e.seccion}</div>
