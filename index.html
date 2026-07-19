@@ -1348,13 +1348,22 @@ async function activarNotifPadre(dni) {
     const token = await FB.getToken(msg, { vapidKey: FB.VAPID_KEY_FCM, serviceWorkerRegistration: reg });
     if (!token) { console.warn('No se pudo obtener el token FCM'); return; }
     // 🧹 FIX-NOTIF-DUP: si este dispositivo tenía un token anterior distinto,
-    // borrarlo de Firestore para que no reciba notificaciones duplicadas.
+    // borrar el documento legado (nombrado por token) para no duplicar avisos.
     const prevToken = localStorage.getItem('fcmTokenPrev');
     if (prevToken && prevToken !== token) {
       await FB.deleteDoc(FB.doc(FB.db, 'fcmTokens', prevToken)).catch(() => {});
     }
     localStorage.setItem('fcmTokenPrev', token);
-    await FB.setDoc(FB.doc(FB.db, 'fcmTokens', token), {
+    // 🛡️ FIX-NOTIF-DUP-2: ID permanente por dispositivo como nombre del documento.
+    // El teléfono siempre sobrescribe SU único doc, aunque cambie el DNI o rote
+    // el token — estructuralmente imposible acumular duplicados.
+    let devId = localStorage.getItem('fcmDeviceId');
+    if (!devId) {
+      devId = 'dev_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '_' + Math.random().toString(36).slice(2));
+      localStorage.setItem('fcmDeviceId', devId);
+    }
+    await FB.setDoc(FB.doc(FB.db, 'fcmTokens', devId), {
+      token,
       dniPadre: dni,
       creado: FB.serverTimestamp(),
       dispositivo: navigator.userAgent.slice(0, 140)

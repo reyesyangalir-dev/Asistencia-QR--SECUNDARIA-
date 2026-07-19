@@ -33,14 +33,21 @@ messaging.onBackgroundMessage((payload) => {
     body: payload.data?.cuerpo || '',
     icon: './logo.jpeg',
     badge: './badge-96.png',
+    tag: 'asist-' + (payload.data?.estudianteId || '') + '-' + (payload.data?.fecha || Date.now()),
     data: payload.data || {}
   };
-  self.registration.showNotification(titulo, opciones);
 
   // 🔴 Numerito rojo encima del ícono de la app (Badging API)
+  // Se dispara en paralelo, ANTES del return, para no quedar fuera del evento
   if ('setAppBadge' in self.navigator) {
     self.navigator.setAppBadge(1).catch(() => {});
   }
+
+  // ⚠️ FIX-NOTIF-DUP-3: retornar la promesa mantiene vivo el evento push
+  // hasta que la notificación esté visible. Sin este return, Chrome a veces
+  // cree que el push terminó sin mostrar nada y dispara su aviso genérico
+  // "Este sitio se actualizó en segundo plano" como notificación duplicada.
+  return self.registration.showNotification(titulo, opciones);
 });
 
 // Al tocar la notificación, abrir (o enfocar) la app
