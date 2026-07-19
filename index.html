@@ -30,6 +30,14 @@
      Copia el contenido de sw.js (incluido en este paquete) a la raíz de tu servidor. -->
 <script>
 if ('serviceWorker' in navigator) {
+  // 🧹 FIX-NOTIF-DUP: eliminar registros viejos del SW por defecto de Firebase
+  // (firebase-messaging-sw.js) que causaban una segunda notificación duplicada.
+  navigator.serviceWorker.getRegistrations().then(regs => {
+    regs.forEach(r => {
+      const swUrl = (r.active || r.waiting || r.installing)?.scriptURL || '';
+      if (swUrl.includes('firebase-messaging-sw.js')) r.unregister();
+    });
+  }).catch(() => {});
   navigator.serviceWorker.register('./sw.js', { scope: './' })
     .then(reg => {
       console.log('✅ Service Worker registrado:', reg.scope);
@@ -1339,6 +1347,13 @@ async function activarNotifPadre(dni) {
     const reg = await navigator.serviceWorker.ready;
     const token = await FB.getToken(msg, { vapidKey: FB.VAPID_KEY_FCM, serviceWorkerRegistration: reg });
     if (!token) { console.warn('No se pudo obtener el token FCM'); return; }
+    // 🧹 FIX-NOTIF-DUP: si este dispositivo tenía un token anterior distinto,
+    // borrarlo de Firestore para que no reciba notificaciones duplicadas.
+    const prevToken = localStorage.getItem('fcmTokenPrev');
+    if (prevToken && prevToken !== token) {
+      await FB.deleteDoc(FB.doc(FB.db, 'fcmTokens', prevToken)).catch(() => {});
+    }
+    localStorage.setItem('fcmTokenPrev', token);
     await FB.setDoc(FB.doc(FB.db, 'fcmTokens', token), {
       dniPadre: dni,
       creado: FB.serverTimestamp(),
