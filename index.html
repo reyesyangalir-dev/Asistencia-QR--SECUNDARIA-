@@ -114,6 +114,8 @@ import { getFirestore, collection, doc, addDoc, getDoc, getDocs, setDoc, updateD
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getMessaging, getToken, onMessage, isSupported as fcmIsSupported }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging.js";
+import { getFunctions, httpsCallable }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js";
 
 // ══════════════════════════════════════════════════════════════════
 // 🔐 SEGURIDAD — API KEY DE FIREBASE
@@ -145,6 +147,10 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+// FIX-SEC-PADRE: Cloud Functions — usado para verificar el DNI del padre en el
+// servidor y entregarle un token con su DNI "grabado" (custom claim), en vez de
+// dejar que la app cliente consulte Firestore directamente de forma anónima.
+const functionsFB = getFunctions(app, 'us-central1');
 
 // ══ Firebase Cloud Messaging (notificaciones push) ══
 // Clave VAPID pública generada en Firebase Console → Configuración →
@@ -157,7 +163,7 @@ fcmIsSupported().then(soportado => {
 }).catch(() => {});
 
 // Objeto interno — nunca se expone en window
-const _fbInterno = { auth, db, collection, doc, addDoc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, query, where, orderBy, onSnapshot, serverTimestamp, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, signInAnonymously, signInWithCustomToken, writeBatch, getMessaging:()=>messaging, getToken, onMessage, VAPID_KEY_FCM };
+const _fbInterno = { auth, db, collection, doc, addDoc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, query, where, orderBy, onSnapshot, serverTimestamp, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, signInAnonymously, signInWithCustomToken, writeBatch, getMessaging:()=>messaging, getToken, onMessage, VAPID_KEY_FCM, functionsFB, httpsCallable };
 
 // FIX-LETRERO: llamar _iniciarApp cuando Firebase esté listo.
 // Si el script clásico ya la registró en window, la llamamos de inmediato.
@@ -1468,11 +1474,30 @@ async function hacerLoginPadre() {
   btn.disabled = true; btn.textContent = '⏳ Verificando…';
   try {
     // FIX-RACE-PADRE: _ignorarAuthChange evita que el "vigilante" de sesión
-    // (onAuthStateChanged) cierre esta sesión anónima creyendo que es una cuenta
+    // (onAuthStateChanged) cierre esta sesión creyendo que es una cuenta
     // de staff sin perfil en 'usuarios' — eso era lo que obligaba a reingresar el DNI.
     _ignorarAuthChange = true;
-    // Verificar que existan hijos con ese DNI en Firestore (sin custom token)
-    await FB.signInAnonymously(FB.auth);
+    // FIX-SEC-PADRE: en vez de autenticar anónimo y consultar Firestore directo
+    // (lo que permitía a cualquiera leer TODA la colección 'estudiantes'), se
+    // llama a la Cloud Function 'verificarPadre', que valida el DNI en el
+    // servidor y entrega un token con el DNI grabado como "custom claim".
+    // Las reglas de Firestore solo dejan ver documentos cuyo dniPadre coincida
+    // con ese claim, así que aunque alguien abra la consola del navegador,
+    // solo puede ver los datos de SU propio DNI.
+    const verificarPadre = FB.httpsCallable(FB.functionsFB, 'verificarPadre');
+    let resultado;
+    try {
+      resultado = await verificarPadre({ dni });
+    } catch (fnErr) {
+      _ignorarAuthChange = false;
+      err.textContent = fnErr.code === 'functions/not-found'
+        ? '❌ DNI no encontrado en el sistema'
+        : '❌ Error de conexión. Intenta de nuevo.';
+      err.style.display = 'block';
+      btn.disabled = false; btn.textContent = '🔐 Ingresar';
+      return;
+    }
+    await FB.signInWithCustomToken(FB.auth, resultado.data.token);
     const hijos = await fsQuery('estudiantes', FB.where('dniPadre','==',dni));
     if (!hijos.length) {
       await FB.signOut(FB.auth);
@@ -2757,8 +2782,20 @@ async function consultarPadre() {
   try {
     // FIX-RACE-PADRE: misma protección que en hacerLoginPadre()
     _ignorarAuthChange = true;
-    // Autenticación anónima — no requiere Cloud Function
-    if (!FB.auth.currentUser) await FB.signInAnonymously(FB.auth);
+    // FIX-SEC-PADRE: mismo cambio que en hacerLoginPadre() — verificación vía
+    // Cloud Function en vez de autenticación anónima directa.
+    if (!FB.auth.currentUser || !sesion || sesion.dni !== dni) {
+      const verificarPadre = FB.httpsCallable(FB.functionsFB, 'verificarPadre');
+      let resultado;
+      try {
+        resultado = await verificarPadre({ dni });
+      } catch (fnErr) {
+        _ignorarAuthChange = false;
+        notif(fnErr.code === 'functions/not-found' ? '❌ DNI no encontrado en el sistema' : '❌ Error de conexión','error');
+        return;
+      }
+      await FB.signInWithCustomToken(FB.auth, resultado.data.token);
+    }
     const hijos=await fsQuery('estudiantes', FB.where('dniPadre','==',dni));
     if (!hijos.length) { _ignorarAuthChange = false; notif('❌ DNI no encontrado en el sistema', 'error'); return; }
     _ignorarAuthChange = false;
